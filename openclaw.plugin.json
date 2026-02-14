@@ -53,7 +53,74 @@
       "adaptiveResults": {
         "type": "boolean",
         "default": true,
-        "description": "Vary result count based on score quality (high score → fewer results, low score → none)"
+        "description": "Vary result count based on score quality (high score = fewer results, low score = none)"
+      },
+      "halfLifeHours": {
+        "type": "number",
+        "default": 24,
+        "description": "Temporal decay half-life in hours. Recent memories score higher. Set 0 to disable."
+      },
+      "skipPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": null,
+        "description": "Custom regex patterns (strings) for prompts to skip. Null uses built-in defaults."
+      },
+      "enableSkipPatterns": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable intent-gating skip patterns (creative, procedural, meta prompts)"
+      },
+      "enableBm25": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable BM25 keyword search alongside vector search"
+      },
+      "enableRrf": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable Reciprocal Rank Fusion to merge multiple search signals"
+      },
+      "rrfWeights": {
+        "type": "object",
+        "properties": {
+          "vector": { "type": "number", "default": 0.4 },
+          "bm25": { "type": "number", "default": 0.3 },
+          "recency": { "type": "number", "default": 0.2 },
+          "entity": { "type": "number", "default": 0.1 }
+        },
+        "default": { "vector": 0.4, "bm25": 0.3, "recency": 0.2, "entity": 0.1 },
+        "description": "Signal weights for RRF fusion"
+      },
+      "rrfK": {
+        "type": "number",
+        "default": 60,
+        "description": "RRF constant k (higher = more conservative fusion)"
+      },
+      "enableTemporalParsing": {
+        "type": "boolean",
+        "default": false,
+        "description": "Parse temporal expressions (yesterday, last week) from prompts"
+      },
+      "enableFeedbackLoop": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable agent_end feedback hook for utility score tracking"
+      },
+      "mmrLambda": {
+        "type": "number",
+        "default": 0.7,
+        "description": "MMR diversity parameter (0=max diversity, 1=max relevance)"
+      },
+      "enableMmr": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable MMR diversity filtering to remove redundant memories"
+      },
+      "fuzzyCacheThreshold": {
+        "type": "number",
+        "default": 0.85,
+        "description": "Jaccard similarity threshold for fuzzy cache matching (0-1). Set 1.0 for exact-only."
       }
     }
   }

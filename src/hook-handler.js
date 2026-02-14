@@ -1,6 +1,9 @@
 /**
  * before_agent_start hook handler — orchestrates memory search
  * and context injection into prompts.
+ *
+ * v2.0: Multi-signal retrieval with temporal decay, skip patterns,
+ * fuzzy cache, MMR diversity, BM25 hybrid search, and RRF fusion.
  */
 
 import { searchMemories } from "./memory-client.js";
@@ -9,35 +12,173 @@ import { formatContext } from "./context-formatter.js";
 let _callCount = 0;
 
 // ---------------------------------------------------------------------------
-// Prompt dedup LRU cache — skips Gemini embedding call on repeated prompts
+// Default skip patterns — prompts that never benefit from memory injection
+// ---------------------------------------------------------------------------
+const DEFAULT_SKIP_PATTERNS = [
+  /^(write|create|generate|imagine|compose)\b/i,
+  /^(format|convert|translate|calculate)\b/i,
+  /^(clear|reset|start over|help|thanks|ok|yes|no|sure)\b/i,
+];
+
+/**
+ * Check if a prompt matches any skip pattern.
+ * @param {string} prompt - Trimmed prompt text
+ * @param {Array<RegExp|string>} patterns - Skip patterns
+ * @returns {boolean}
+ */
+export function matchesSkipPattern(prompt, patterns = DEFAULT_SKIP_PATTERNS) {
+  for (const p of patterns) {
+    const re = p instanceof RegExp ? p : new RegExp(p, "i");
+    if (re.test(prompt)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Temporal decay — exponential decay based on chunk age
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a date from a memory chunk's path field.
+ * Expects paths like "memory/2026-02-12.md" or similar date patterns.
+ *
+ * @param {string} path - Chunk path
+ * @returns {Date|null}
+ */
+export function parseDateFromPath(path) {
+  if (!path) return null;
+  // Match YYYY-MM-DD pattern anywhere in the path
+  const match = path.match(/(\d{4}-\d{2}-\d{2})/);
+  if (!match) return null;
+  const d = new Date(match[1] + "T00:00:00Z");
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Apply temporal decay to scored results.
+ * finalScore = cosineScore * exp(-ageHours / halfLifeHours)
+ *
+ * @param {Array<{score: number, path?: string}>} results
+ * @param {number} halfLifeHours - Decay half-life in hours
+ * @param {number} [now] - Current timestamp (ms), defaults to Date.now()
+ * @returns {Array} Results with adjusted scores, re-sorted by finalScore
+ */
+export function applyTemporalDecay(results, halfLifeHours = 24, now = Date.now()) {
+  if (!results || results.length === 0) return [];
+  if (halfLifeHours <= 0) return results;
+
+  const decayRate = Math.LN2 / halfLifeHours;
+
+  const decayed = results.map((r) => {
+    const chunkDate = parseDateFromPath(r.path);
+    if (!chunkDate) return { ...r }; // No date → no decay penalty
+
+    const ageHours = Math.max(0, (now - chunkDate.getTime()) / (1000 * 60 * 60));
+    const decayFactor = Math.exp(-decayRate * ageHours);
+    return {
+      ...r,
+      _originalScore: r.score,
+      score: r.score * decayFactor,
+    };
+  });
+
+  // Re-sort by decayed score descending
+  decayed.sort((a, b) => b.score - a.score);
+  return decayed;
+}
+
+// ---------------------------------------------------------------------------
+// Fuzzy semantic cache — Jaccard similarity on word tokens
+// ---------------------------------------------------------------------------
+
+/**
+ * Tokenize a string into lowercase word tokens.
+ * @param {string} str
+ * @returns {Set<string>}
+ */
+export function tokenize(str) {
+  const tokens = str.toLowerCase().match(/\b\w+\b/g);
+  return new Set(tokens || []);
+}
+
+/**
+ * Compute Jaccard similarity between two token sets.
+ * @param {Set<string>} a
+ * @param {Set<string>} b
+ * @returns {number} 0-1
+ */
+export function jaccardSimilarity(a, b) {
+  if (a.size === 0 && b.size === 0) return 1;
+  if (a.size === 0 || b.size === 0) return 0;
+
+  let intersection = 0;
+  const smaller = a.size <= b.size ? a : b;
+  const larger = a.size <= b.size ? b : a;
+  for (const token of smaller) {
+    if (larger.has(token)) intersection++;
+  }
+  return intersection / (a.size + b.size - intersection);
+}
+
+// ---------------------------------------------------------------------------
+// Prompt dedup LRU cache with fuzzy matching
 // ---------------------------------------------------------------------------
 const DEFAULT_CACHE_SIZE = 20;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_FUZZY_THRESHOLD = 0.85;
 
 class PromptCache {
-  constructor(maxSize = DEFAULT_CACHE_SIZE, ttlMs = DEFAULT_CACHE_TTL_MS) {
+  constructor(maxSize = DEFAULT_CACHE_SIZE, ttlMs = DEFAULT_CACHE_TTL_MS, fuzzyThreshold = DEFAULT_FUZZY_THRESHOLD) {
     this._maxSize = maxSize;
     this._ttlMs = ttlMs;
-    /** @type {Map<string, { results: Array, ts: number }>} */
+    this._fuzzyThreshold = fuzzyThreshold;
+    /** @type {Map<string, { results: Array, ts: number, tokens: Set<string> }>} */
     this._map = new Map();
   }
 
   get(key) {
+    // Exact match first
     const entry = this._map.get(key);
-    if (!entry) return undefined;
-    if (Date.now() - entry.ts > this._ttlMs) {
-      this._map.delete(key);
-      return undefined;
+    if (entry) {
+      if (Date.now() - entry.ts > this._ttlMs) {
+        this._map.delete(key);
+      } else {
+        // Move to end (most recently used)
+        this._map.delete(key);
+        this._map.set(key, entry);
+        return entry.results;
+      }
     }
-    // Move to end (most recently used)
-    this._map.delete(key);
-    this._map.set(key, entry);
-    return entry.results;
+
+    // Fuzzy match: compare against cached entries
+    if (this._fuzzyThreshold < 1.0) {
+      const keyTokens = tokenize(key);
+      let bestMatch = null;
+      let bestSim = 0;
+
+      for (const [cachedKey, cachedEntry] of this._map) {
+        if (Date.now() - cachedEntry.ts > this._ttlMs) {
+          this._map.delete(cachedKey);
+          continue;
+        }
+        const sim = jaccardSimilarity(keyTokens, cachedEntry.tokens);
+        if (sim >= this._fuzzyThreshold && sim > bestSim) {
+          bestSim = sim;
+          bestMatch = cachedEntry;
+        }
+      }
+
+      if (bestMatch) {
+        return bestMatch.results;
+      }
+    }
+
+    return undefined;
   }
 
   set(key, results) {
     if (this._map.has(key)) this._map.delete(key);
-    this._map.set(key, { results, ts: Date.now() });
+    this._map.set(key, { results, ts: Date.now(), tokens: tokenize(key) });
     // Evict oldest if over capacity
     if (this._map.size > this._maxSize) {
       const oldest = this._map.keys().next().value;
@@ -55,14 +196,74 @@ class PromptCache {
 }
 
 // ---------------------------------------------------------------------------
+// MMR — Maximal Marginal Relevance for result diversity
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute text similarity between two chunks using Jaccard on word tokens.
+ * @param {string} textA
+ * @param {string} textB
+ * @returns {number} 0-1
+ */
+function textSimilarity(textA, textB) {
+  return jaccardSimilarity(tokenize(textA || ""), tokenize(textB || ""));
+}
+
+/**
+ * Apply MMR diversity filtering to remove redundant memories.
+ *
+ * MMR = lambda * relevance - (1 - lambda) * max_similarity_to_selected
+ *
+ * @param {Array<{text: string, score: number}>} results - Score-sorted results
+ * @param {number} lambda - Balance between relevance and diversity (0-1, default 0.7)
+ * @param {number} [maxResults] - Maximum results to return
+ * @returns {Array} Diverse subset
+ */
+export function mmrFilter(results, lambda = 0.7, maxResults = Infinity) {
+  if (!results || results.length <= 1) return results || [];
+
+  const selected = [results[0]];
+  const candidates = results.slice(1);
+
+  while (selected.length < maxResults && candidates.length > 0) {
+    let bestIdx = -1;
+    let bestMmr = -Infinity;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      const relevance = candidate.score;
+
+      // Max similarity to any already-selected item
+      let maxSim = 0;
+      for (const sel of selected) {
+        const sim = textSimilarity(candidate.text, sel.text);
+        if (sim > maxSim) maxSim = sim;
+      }
+
+      const mmrScore = lambda * relevance - (1 - lambda) * maxSim;
+      if (mmrScore > bestMmr) {
+        bestMmr = mmrScore;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx === -1) break;
+    selected.push(candidates[bestIdx]);
+    candidates.splice(bestIdx, 1);
+  }
+
+  return selected;
+}
+
+// ---------------------------------------------------------------------------
 // Adaptive maxResults — vary top-k based on score distribution
 // ---------------------------------------------------------------------------
 
 /**
  * Filter results adaptively based on score quality.
- *   top score > 0.7  → keep at most 2 (strong match)
- *   top score 0.4–0.7 → keep at most maxResults (moderate match)
- *   top score < 0.4  → keep nothing (noise)
+ *   top score > 0.7  -> keep at most 2 (strong match)
+ *   top score 0.4-0.7 -> keep at most maxResults (moderate match)
+ *   top score < 0.4  -> keep nothing (noise)
  *
  * @param {Array<{score: number}>} results
  * @param {number} maxResults - configured upper bound
@@ -97,12 +298,74 @@ export function createHandler(config, api) {
     cacheSize = DEFAULT_CACHE_SIZE,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     adaptiveResults = true,
+    // v2.0 config
+    halfLifeHours = 24,
+    skipPatterns = null,
+    enableSkipPatterns = true,
+    mmrLambda = 0.7,
+    enableMmr = true,
+    fuzzyCacheThreshold = DEFAULT_FUZZY_THRESHOLD,
+    // Phase 2 config
+    enableBm25 = false,
+    enableRrf = false,
+    rrfWeights = { vector: 0.4, bm25: 0.3, recency: 0.2, entity: 0.1 },
+    rrfK = 60,
+    enableTemporalParsing = false,
   } = config;
 
   const logger = api.logger;
   const openClawConfig = api.config;
   const runtime = api.runtime;
-  const cache = new PromptCache(cacheSize, cacheTtlMs);
+  const cache = new PromptCache(cacheSize, cacheTtlMs, fuzzyCacheThreshold);
+
+  // Compile skip patterns once at init
+  const compiledSkipPatterns = skipPatterns
+    ? skipPatterns.map((p) => (p instanceof RegExp ? p : new RegExp(p, "i")))
+    : DEFAULT_SKIP_PATTERNS;
+
+  // Lazy-load Phase 2 modules
+  let _bm25Module = null;
+  let _rrfModule = null;
+  let _queryEnricher = null;
+
+  async function getBm25Module() {
+    if (!enableBm25) return null;
+    if (_bm25Module === undefined) return null; // failed previously
+    if (_bm25Module) return _bm25Module;
+    try {
+      _bm25Module = await import("./bm25-index.js");
+      return _bm25Module;
+    } catch {
+      _bm25Module = undefined;
+      return null;
+    }
+  }
+
+  async function getRrfModule() {
+    if (!enableRrf) return null;
+    if (_rrfModule === undefined) return null;
+    if (_rrfModule) return _rrfModule;
+    try {
+      _rrfModule = await import("./rank-fusion.js");
+      return _rrfModule;
+    } catch {
+      _rrfModule = undefined;
+      return null;
+    }
+  }
+
+  async function getQueryEnricher() {
+    if (!enableTemporalParsing && !enableBm25) return null;
+    if (_queryEnricher === undefined) return null;
+    if (_queryEnricher) return _queryEnricher;
+    try {
+      _queryEnricher = await import("./query-enricher.js");
+      return _queryEnricher;
+    } catch {
+      _queryEnricher = undefined;
+      return null;
+    }
+  }
 
   /**
    * Hook handler called before the agent processes each prompt.
@@ -128,9 +391,17 @@ export function createHandler(config, api) {
       return;
     }
 
+    // Skip pattern matching (intent gating)
+    if (enableSkipPatterns && matchesSkipPattern(trimmed, compiledSkipPatterns)) {
+      if (logInjections) {
+        logger.info(`hookclaw: #${callNum} skip — matches skip pattern`);
+      }
+      return;
+    }
+
     const startTime = Date.now();
 
-    // Check prompt dedup cache
+    // Check prompt dedup cache (now with fuzzy matching)
     const cached = cache.get(trimmed);
     if (cached !== undefined) {
       if (cached.length === 0) {
@@ -152,6 +423,18 @@ export function createHandler(config, api) {
       return;
     }
 
+    // Phase 2: Query enrichment (entity extraction, temporal parsing)
+    let queryEnrichment = null;
+    const enricherMod = await getQueryEnricher();
+    if (enricherMod) {
+      try {
+        queryEnrichment = enricherMod.enrichQuery(trimmed);
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    // Vector search (existing path)
     const rawResults = await searchMemories(prompt, {
       maxResults,
       minScore,
@@ -162,12 +445,50 @@ export function createHandler(config, api) {
       logger,
     });
 
-    // Apply adaptive filtering
-    const results = adaptiveResults
-      ? adaptiveFilter(rawResults, maxResults)
-      : rawResults;
+    // Phase 2: BM25 search in parallel (if enabled)
+    let bm25Results = [];
+    const bm25Mod = await getBm25Module();
+    if (bm25Mod) {
+      try {
+        const boostTerms = queryEnrichment?.entities || [];
+        bm25Results = bm25Mod.search(trimmed, { maxResults, boostTerms });
+      } catch {
+        // Non-fatal
+      }
+    }
 
-    // Cache the (possibly filtered) results
+    // Phase 2: RRF fusion (if both signals available)
+    let fusedResults = rawResults;
+    const rrfMod = await getRrfModule();
+    if (rrfMod && (bm25Results.length > 0 || queryEnrichment)) {
+      try {
+        fusedResults = rrfMod.fuseResults({
+          vectorResults: rawResults || [],
+          bm25Results,
+          weights: rrfWeights,
+          k: rrfK,
+          maxResults,
+          temporalFilter: queryEnrichment?.temporalFilter || null,
+        });
+      } catch {
+        fusedResults = rawResults;
+      }
+    }
+
+    // Apply temporal decay
+    const decayedResults = applyTemporalDecay(fusedResults || [], halfLifeHours);
+
+    // Apply adaptive filtering
+    const filtered = adaptiveResults
+      ? adaptiveFilter(decayedResults, maxResults)
+      : decayedResults;
+
+    // Apply MMR diversity filter
+    const results = enableMmr
+      ? mmrFilter(filtered, mmrLambda, maxResults)
+      : filtered;
+
+    // Cache the final results
     cache.set(trimmed, results || []);
 
     if (!results || results.length === 0) {
@@ -194,8 +515,10 @@ export function createHandler(config, api) {
     if (logInjections) {
       const elapsed = Date.now() - startTime;
       const topScore = results[0]?.score?.toFixed(3) || "?";
+      const signals = [enableBm25 && bm25Results.length > 0 ? "vec+bm25" : "vec"];
+      if (enableRrf && rrfMod) signals[0] += "+rrf";
       logger.info(
-        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore})`
+        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore}, signals: ${signals[0]})`
       );
     }
 
