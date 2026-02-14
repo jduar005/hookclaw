@@ -1,0 +1,24 @@
+{
+  "name": "hookclaw",
+  "version": "1.0.0",
+  "description": "OpenClaw Memory RAG Plugin — auto-hydrates prompts with relevant memories via before_agent_start hook",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": ["openclaw", "plugin", "memory", "rag"],
+  "author": "JP",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.9"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

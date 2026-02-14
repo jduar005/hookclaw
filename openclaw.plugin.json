@@ -1,0 +1,45 @@
+{
+  "id": "hookclaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxResults": {
+        "type": "number",
+        "default": 5,
+        "description": "Maximum number of memory chunks to inject"
+      },
+      "minScore": {
+        "type": "number",
+        "default": 0.3,
+        "description": "Minimum similarity score threshold (0-1)"
+      },
+      "maxContextChars": {
+        "type": "number",
+        "default": 4000,
+        "description": "Maximum total characters of injected context"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 2000,
+        "description": "Timeout for memory search in milliseconds"
+      },
+      "logInjections": {
+        "type": "boolean",
+        "default": true,
+        "description": "Log when memories are injected into prompts"
+      },
+      "formatTemplate": {
+        "type": "string",
+        "enum": ["xml", "markdown"],
+        "default": "xml",
+        "description": "Format for injected context block"
+      },
+      "skipShortPrompts": {
+        "type": "number",
+        "default": 10,
+        "description": "Skip prompts shorter than this many characters"
+      }
+    }
+  }
+}
