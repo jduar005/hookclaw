@@ -1,56 +1,49 @@
 /**
- * Memory search client — wraps OpenClaw's getMemorySearchManager
- * with caching, timeout, and graceful fallback.
+ * Memory search client — wraps OpenClaw's createMemorySearchTool
+ * to execute memory searches programmatically.
  *
  * Uses the built-in memory-core search index (SQLite + embeddings).
  */
 
-/** @type {import('openclaw/plugin-sdk').MemorySearchManager | null} */
-let _manager = null;
+/** @type {object | null} */
+let _tool = null;
 let _initFailed = false;
-let _initPromise = null;
 
 /**
- * Initialize the memory search manager from OpenClaw internals.
- * Caches the instance across calls for SQLite connection reuse.
+ * Initialize the memory search tool from OpenClaw runtime.
+ * Caches the tool instance across calls.
  *
  * @param {object} params
+ * @param {object} params.runtime - OpenClaw PluginRuntime
  * @param {object} params.config - OpenClaw config object
- * @param {string} params.agentId - Agent identifier
+ * @param {string} params.sessionKey - Agent session key
  * @param {object} params.logger - Plugin logger
- * @returns {Promise<import('openclaw/plugin-sdk').MemorySearchManager | null>}
+ * @returns {object | null}
  */
-async function getManager({ config, agentId, logger }) {
+function getTool({ runtime, config, sessionKey, logger }) {
   if (_initFailed) return null;
-  if (_manager) return _manager;
+  if (_tool) return _tool;
 
-  // Deduplicate concurrent init calls
-  if (_initPromise) return _initPromise;
+  try {
+    const tool = runtime.tools.createMemorySearchTool({
+      config,
+      agentSessionKey: sessionKey,
+    });
 
-  _initPromise = (async () => {
-    try {
-      const { getMemorySearchManager } = await import("openclaw/plugin-sdk");
-      const result = await getMemorySearchManager({ cfg: config, agentId: agentId || "hookclaw" });
-
-      if (!result.manager) {
-        logger.warn(`hookclaw: memory manager unavailable — ${result.error || "unknown reason"}`);
-        _initFailed = true;
-        return null;
-      }
-
-      _manager = result.manager;
-      logger.info("hookclaw: memory search manager initialized");
-      return _manager;
-    } catch (err) {
+    if (!tool) {
+      logger.warn("hookclaw: memory search tool unavailable (createMemorySearchTool returned null)");
       _initFailed = true;
-      logger.error(`hookclaw: failed to initialize memory search manager — ${err.message}`);
       return null;
-    } finally {
-      _initPromise = null;
     }
-  })();
 
-  return _initPromise;
+    _tool = tool;
+    logger.info("hookclaw: memory search tool initialized");
+    return _tool;
+  } catch (err) {
+    _initFailed = true;
+    logger.error(`hookclaw: failed to create memory search tool — ${err.message}`);
+    return null;
+  }
 }
 
 /**
@@ -61,31 +54,49 @@ async function getManager({ config, agentId, logger }) {
  * @param {number} options.maxResults - Maximum results to return
  * @param {number} options.minScore - Minimum similarity score (0-1)
  * @param {number} options.timeoutMs - Timeout in milliseconds
+ * @param {object} options.runtime - OpenClaw PluginRuntime
  * @param {object} options.config - OpenClaw config
- * @param {string} options.agentId - Agent ID
  * @param {string} [options.sessionKey] - Session key for scoped search
  * @param {object} options.logger - Plugin logger
  * @returns {Promise<Array<{text: string, source: string, path: string, lines: string, score: number}>>}
  */
-export async function searchMemories(query, { maxResults = 5, minScore = 0.3, timeoutMs = 2000, config, agentId, sessionKey, logger } = {}) {
-  const manager = await getManager({ config, agentId, logger });
-  if (!manager) return [];
+export async function searchMemories(query, { maxResults = 5, minScore = 0.3, timeoutMs = 2000, runtime, config, sessionKey, logger } = {}) {
+  const tool = getTool({ runtime, config, sessionKey, logger });
+  if (!tool) return [];
 
   try {
-    const results = await Promise.race([
-      manager.search(query, { maxResults, minScore, sessionKey }),
+    const rawResult = await Promise.race([
+      tool.execute("hookclaw-search", { query, maxResults, minScore }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Memory search timeout")), timeoutMs)
       ),
     ]);
 
-    return (results || []).map((r) => ({
-      text: r.snippet || "",
-      source: r.source || "memory",
-      path: r.path || "",
-      lines: r.startLine && r.endLine ? `${r.startLine}-${r.endLine}` : "",
-      score: typeof r.score === "number" ? r.score : 0,
-    }));
+    // The tool returns { content: [{ type: "text", text: "..." }], details: { results, count } }
+    // Parse the results from the details or from the text content
+    const details = rawResult?.details;
+    if (details?.results && Array.isArray(details.results)) {
+      return details.results.map((r) => ({
+        text: r.snippet || r.text || "",
+        source: r.source || "memory",
+        path: r.path || "",
+        lines: r.startLine && r.endLine ? `${r.startLine}-${r.endLine}` : (r.lines || ""),
+        score: typeof r.score === "number" ? r.score : 0,
+      }));
+    }
+
+    // Fallback: try to extract from details.memories (memory-lancedb format)
+    if (details?.memories && Array.isArray(details.memories)) {
+      return details.memories.map((r) => ({
+        text: r.text || "",
+        source: "memory",
+        path: "",
+        lines: "",
+        score: typeof r.score === "number" ? r.score : 0,
+      }));
+    }
+
+    return [];
   } catch (err) {
     logger.warn(`hookclaw: memory search failed — ${err.message}`);
     return [];
@@ -93,10 +104,9 @@ export async function searchMemories(query, { maxResults = 5, minScore = 0.3, ti
 }
 
 /**
- * Reset the cached manager (useful for testing).
+ * Reset the cached tool (useful for testing).
  */
 export function resetManager() {
-  _manager = null;
+  _tool = null;
   _initFailed = false;
-  _initPromise = null;
 }

@@ -7,6 +7,11 @@ function fakeApi(configOverrides = {}) {
   return {
     config: { /* OpenClawConfig stub */ },
     pluginConfig: configOverrides,
+    runtime: {
+      tools: {
+        createMemorySearchTool: () => null, // No memory available in test env
+      },
+    },
     logger: {
       debug: () => {},
       info: () => {},

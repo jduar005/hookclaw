@@ -28,6 +28,7 @@ export function createHandler(config, api) {
 
   const logger = api.logger;
   const openClawConfig = api.config;
+  const runtime = api.runtime;
 
   /**
    * Hook handler called before the agent processes each prompt.
@@ -57,8 +58,8 @@ export function createHandler(config, api) {
       maxResults,
       minScore,
       timeoutMs,
+      runtime,
       config: openClawConfig,
-      agentId: ctx?.agentId || "hookclaw",
       sessionKey: ctx?.sessionKey,
       logger,
     });
