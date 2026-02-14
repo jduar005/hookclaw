@@ -53,7 +53,68 @@
       "adaptiveResults": {
         "type": "boolean",
         "default": true,
-        "description": "Vary result count based on score quality (high score → fewer results, low score → none)"
+        "description": "Vary result count based on score quality (high score = fewer results, low score = none)"
+      },
+      "halfLifeHours": {
+        "type": "number",
+        "default": 168,
+        "description": "Temporal decay half-life in hours (default 1 week). Recent memories score higher. Set 0 to disable."
+      },
+      "skipPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": null,
+        "description": "Custom regex patterns (strings) for prompts to skip. Null uses built-in defaults."
+      },
+      "enableSkipPatterns": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable intent-gating skip patterns (creative, procedural, meta prompts)"
+      },
+      "enableTemporalParsing": {
+        "type": "boolean",
+        "default": false,
+        "description": "Parse temporal expressions (yesterday, last week) from prompts. Diagnostic-only: results are logged but not used for search filtering."
+      },
+      "enableFeedbackLoop": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable agent_end feedback hook for utility score tracking"
+      },
+      "mmrLambda": {
+        "type": "number",
+        "default": 0.7,
+        "description": "MMR diversity parameter (0=max diversity, 1=max relevance)"
+      },
+      "enableMmr": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable MMR diversity filtering to remove redundant memories"
+      },
+      "fuzzyCacheThreshold": {
+        "type": "number",
+        "default": 0.85,
+        "description": "Jaccard similarity threshold for fuzzy cache matching (0-1). Set 1.0 for exact-only."
+      },
+      "enableFts": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable direct FTS5 keyword search to boost vector results"
+      },
+      "ftsBoostWeight": {
+        "type": "number",
+        "default": 0.3,
+        "description": "Weight for FTS5 keyword boost added to vector score (0-1)"
+      },
+      "ftsDbPath": {
+        "type": "string",
+        "default": null,
+        "description": "Override path to OpenClaw SQLite database. Null uses auto-discovery."
+      },
+      "ftsAgentId": {
+        "type": "string",
+        "default": "main",
+        "description": "OpenClaw agent ID for database path resolution"
       }
     }
   }

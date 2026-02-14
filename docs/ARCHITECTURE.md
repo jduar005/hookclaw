@@ -1,10 +1,28 @@
 # HookClaw Architecture & Technical Guide
 
+> **Version**: 2.1.0 (on `feature/v2-multi-signal-retrieval` branch)
+> **v1.1.0** (on `master`) is what's deployed to VMs
+
 ## Overview
 
 HookClaw is an OpenClaw plugin that solves the **post-compaction amnesia problem** — when AI agents lose context after their conversation is compacted to fit within token limits, they forget prior decisions, preferences, and ongoing work.
 
 HookClaw intercepts every prompt via OpenClaw's `before_agent_start` lifecycle hook, searches the agent's memory index for relevant context, and injects the top-k results as prepended context before the model begins reasoning. The agent sees relevant memories alongside the user's message without needing to decide to search — it happens automatically on every turn.
+
+### v2.0 Upgrade
+
+v2.0 transforms HookClaw from a single-signal vector search plugin into a multi-signal, self-improving memory system:
+
+- **Hybrid retrieval**: Vector search + direct FTS5 keyword boost
+- **Score fusion**: Additive FTS5 boost on vector scores for keyword-matching chunks
+- **Temporal decay**: Recent memories score higher via exponential decay (168h half-life)
+- **MMR diversity**: Maximal Marginal Relevance removes redundant/duplicate memories
+- **Intent gating**: Regex-based skip patterns for creative, procedural, and meta prompts
+- **Fuzzy cache**: Jaccard similarity matching increases cache hit rate from ~5% to ~20-30%
+- **Entity extraction**: Regex-based extraction of file paths, error codes, identifiers
+- **Temporal parsing**: Handles "yesterday", "last week", "N days ago" queries
+- **Feedback loop**: `agent_end` hook tracks which memories the agent actually cites
+- **Metrics**: Rolling latency percentiles, injection rates, signal usage tracking
 
 ### The Problem
 
@@ -64,35 +82,55 @@ structured logging with Serilog…"
 └─────────────────────────────────────────────────────────────┘  │
                                                                  │
   ┌──────────────────────────────────────────────────────────────┘
-  │  Memory Search Pipeline
+  │  Memory Search Pipeline (v2.1)
   │
-  │  ┌──────────────┐     ┌───────────────┐     ┌──────────────┐
-  └─▶│ Embedding    │────▶│ Vector Search │────▶│ Context      │
-     │ (Gemini API) │     │ (sqlite-vec)  │     │ Formatter    │
-     └──────────────┘     └───────────────┘     └──────────────┘
-           │                     │                     │
-           ▼                     ▼                     ▼
-     gemini-embedding-001  main.sqlite (~20MB)   XML or Markdown
-     3072 dimensions       58 chunks indexed     ≤4000 chars
-     ~116 cached entries   sqlite-vec extension
+  │  ┌────────────┐   ┌──────────────┐   ┌───────────────┐
+  └─▶│ Intent     │──▶│ Query        │──▶│ Hybrid Search │
+     │ Gating     │   │ Enrichment   │   │               │
+     │ (skip      │   │ (entity +    │   │ Vector Search │
+     │  patterns) │   │  temporal)   │   │ + FTS5 Boost  │
+     └────────────┘   └──────────────┘   └───────┬───────┘
+           │                                      │
+           ▼                                      ▼
+     Skip creative/     ┌─────────────────────────────────────┐
+     procedural/meta    │ FTS5 Boost → Temporal Decay →       │
+     prompts            │ Adaptive Filter → MMR Diversity →   │
+                        │ Context Formatter → prependContext   │
+                        └──────────────────────┬──────────────┘
+                                               │
+                                               ▼
+                                          XML or Markdown
+                                          ≤4000 chars
+
+  Background (agent_end hook):
+     Agent Response → Citation Detection → Utility Scores → JSON file
 ```
 
 ### File Structure
 
 ```
 hookclaw/
-├── index.js                  # Plugin definition + config resolution
-├── openclaw.plugin.json      # Plugin manifest with config schema
+├── index.js                  # Plugin definition + config resolution + feedback hook
+├── openclaw.plugin.json      # Plugin manifest with config schema (24 properties)
 ├── package.json              # ES module, zero runtime dependencies
 ├── src/
-│   ├── hook-handler.js       # before_agent_start orchestration
+│   ├── hook-handler.js       # before_agent_start orchestration (Phase 1 + Phase 2 integration)
 │   ├── memory-client.js      # Wraps createMemorySearchTool with caching
-│   └── context-formatter.js  # XML + Markdown formatters with char limits
+│   ├── context-formatter.js  # XML + Markdown formatters with char limits
+│   ├── fts-search.js          # [v2.1] Direct FTS5 keyword search (node:sqlite)
+│   ├── query-enricher.js     # [v2.0] Entity extraction + temporal parsing
+│   ├── utility-tracker.js    # [v2.0] Feedback loop — citation tracking + Bayesian scores
+│   └── metrics.js            # [v2.0] Performance metrics collector
 ├── test/
 │   ├── context-formatter.test.js  # 15 tests
-│   └── hook-handler.test.js       # 15 tests
+│   ├── hook-handler.test.js       # 74 tests (was 15 in v1.1.0)
+│   ├── fts-search.test.js         # [v2.1] 19 tests
+│   ├── query-enricher.test.js     # [v2.0] 24 tests
+│   ├── utility-tracker.test.js    # [v2.0] 14 tests
+│   └── metrics.test.js            # [v2.0] 16 tests
 ├── docs/
-│   └── ARCHITECTURE.md       # This file
+│   ├── ARCHITECTURE.md       # This file
+│   └── HOOKCLAW-OPTIMIZATION-ROADMAP.md  # Research + implementation plan
 ├── .gitignore
 └── README.md
 ```
@@ -101,13 +139,20 @@ hookclaw/
 
 ```
 index.js
-  └── src/hook-handler.js
-        ├── src/memory-client.js
-        │     └── api.runtime.tools.createMemorySearchTool (OpenClaw internal)
-        │           └── getMemorySearchManager → SQLite + Gemini embeddings
-        └── src/context-formatter.js
-              └── (pure functions, no external deps)
+  ├── src/hook-handler.js
+  │     ├── src/memory-client.js
+  │     │     └── api.runtime.tools.createMemorySearchTool (OpenClaw internal)
+  │     │           └── getMemorySearchManager → SQLite + Gemini embeddings
+  │     ├── src/context-formatter.js      (pure functions, no external deps)
+  │     ├── src/fts-search.js              [v2.1] lazy import, non-fatal if missing
+  │     └── src/query-enricher.js         [v2.0] lazy import, non-fatal if missing
+  │
+  └── [if enableFeedbackLoop]
+        ├── src/utility-tracker.js        [v2.0] lazy import at registration
+        └── src/metrics.js                [v2.0] lazy import at registration
 ```
+
+All v2.0 modules use **lazy dynamic imports** (`await import(...)`) — they're loaded on first use, not at startup. If a module fails to load, its feature is silently disabled and the plugin continues functioning with v1.1.0 behavior.
 
 ## Performance Profile
 
@@ -175,26 +220,44 @@ When a message arrives via Telegram:
 ```
 1. SKIP CHECK
    - If prompt is null/undefined/non-string → return (pass through)
-   - If prompt.trim().length < skipShortPrompts (10) → return (skip "hi", "ok", etc.)
+   - If prompt.trim().length < skipShortPrompts (20) → return (skip "hi", "ok", etc.)
 
-2. MEMORY SEARCH
-   a. Get/create memory search tool (cached after first call)
-      - Uses api.runtime.tools.createMemorySearchTool()
-      - Internally initializes MemorySearchManager (SQLite + Gemini)
-   b. Execute search with timeout race
-      - tool.execute("hookclaw-search", { query: prompt, maxResults: 5, minScore: 0.3 })
-      - Promise.race against 2000ms timeout
-   c. Map results to normalized format
-      - { text, source, path, lines, score }
+2. INTENT GATING [v2.0]
+   - Match prompt against skip patterns (creative, procedural, meta)
+   - If matched → return (skip "write a poem", "format this JSON", "thanks")
 
-3. CONTEXT FORMATTING
+3. FUZZY CACHE CHECK [v2.0]
+   - Tokenize prompt, compute Jaccard similarity against cached prompts
+   - If similarity > fuzzyCacheThreshold (0.85) → return cached results
+
+4. QUERY ENRICHMENT [v2.0, if enabled]
+   - extractEntities(): file paths, error codes, CamelCase, package names, quoted strings
+   - parseTemporalExpression(): "yesterday" → { startDate, endDate }
+
+5. MEMORY SEARCH
+   a. Vector search (existing pipeline)
+      - Get/create memory search tool (cached after first call)
+      - tool.execute() with Promise.race against timeoutMs
+   b. FTS5 keyword search [v2.1, if enableFts]
+      - Direct read-only query against OpenClaw's chunks_fts table
+      - OR-based queries with stop-word filtering
+      - Sigmoid rank normalization: score = -rank / (-rank + 2)
+
+6. SCORE FUSION [v2.1]
+   a. FTS5 additive boost: finalScore = Math.min(1, vectorScore + ftsBoostWeight * ftsScore)
+   b. Temporal decay: score *= exp(-ageHours / halfLifeHours)
+   c. Adaptive filter: vary result count based on score distribution
+   d. MMR diversity: remove redundant memories (if enableMmr)
+
+7. CONTEXT FORMATTING
    - Format results as XML (default) or Markdown
    - Enforce maxContextChars (4000) with truncation
    - Escape XML special characters
 
-4. RETURN
+8. RETURN
    - Return { prependContext: formattedContext }
    - OpenClaw prepends this to the model's input
+   - If enableFeedbackLoop: record injection for later citation tracking
 ```
 
 ### 3. What the Model Sees
@@ -260,13 +323,29 @@ All config lives in `~/.openclaw/openclaw.json` under `plugins.entries.hookclaw.
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
-| `maxResults` | 5 | 1-20 | Max memory chunks to inject. Higher = more context but more tokens consumed. |
-| `minScore` | 0.3 | 0.0-1.0 | Minimum cosine similarity threshold. Lower = more results but noisier. |
-| `maxContextChars` | 4000 | 500-20000 | Total character budget for injected context. Entries are truncated to fit. |
-| `timeoutMs` | 2000 | 500-10000 | Max time to wait for embedding + search. Exceeding this skips injection. |
-| `logInjections` | true | bool | Log each hook invocation with timing and result count. |
-| `formatTemplate` | "xml" | xml/markdown | Output format for context block. XML recommended for Claude models. |
-| `skipShortPrompts` | 10 | 0-100 | Skip prompts shorter than N chars. Avoids searching on "hi", "ok", "yes". |
+| `maxResults` | 3 | 1-20 | Max memory chunks to inject |
+| `minScore` | 0.5 | 0.0-1.0 | Minimum similarity score threshold |
+| `maxContextChars` | 2000 | 500-20000 | Total character budget for injected context |
+| `timeoutMs` | 2000 | 500-10000 | Max time to wait for search |
+| `logInjections` | true | bool | Log injection/skip events |
+| `formatTemplate` | "xml" | xml/markdown | Context format |
+| `skipShortPrompts` | 20 | 0-100 | Skip prompts shorter than N chars |
+| `cacheSize` | 20 | 1-100 | LRU cache entries |
+| `cacheTtlMs` | 300000 | 1000-3600000 | Cache TTL (5 min default) |
+| `adaptiveResults` | true | bool | Vary result count by score quality |
+| **v2.1 options** | | | |
+| `halfLifeHours` | 168 | 0-720 | Temporal decay half-life in hours (0 = disabled) |
+| `enableSkipPatterns` | true | bool | Intent-gating skip patterns |
+| `skipPatterns` | null | string[] | Custom regex patterns (null = built-in defaults) |
+| `enableFts` | true | bool | Direct FTS5 keyword search to boost vector results |
+| `ftsBoostWeight` | 0.3 | 0.0-1.0 | FTS5 boost weight added to vector score |
+| `ftsDbPath` | null | string | Override path to OpenClaw SQLite database |
+| `ftsAgentId` | "main" | string | OpenClaw agent ID for database path resolution |
+| `enableTemporalParsing` | false | bool | Parse temporal expressions (diagnostic-only) |
+| `enableFeedbackLoop` | false | bool | agent_end feedback hook |
+| `enableMmr` | true | bool | MMR diversity filtering |
+| `mmrLambda` | 0.7 | 0.0-1.0 | MMR relevance vs diversity (1=all relevance) |
+| `fuzzyCacheThreshold` | 0.85 | 0.0-1.0 | Fuzzy cache Jaccard threshold |
 
 ### Tuning Guidance
 
@@ -403,8 +482,14 @@ node --test test/*.test.js
 
 ### Test Strategy
 
+**162 tests across 22 suites (7 test files):**
+
 - **context-formatter.test.js** (15 tests): Pure function tests for XML/Markdown formatting, character limits, XML escaping, empty input handling, truncation behavior
-- **hook-handler.test.js** (15 tests): Handler creation, skip logic (short prompts, null events, missing context), call counting, log verification. Uses a `fakeApi()` stub that returns `null` from `createMemorySearchTool` to simulate the test environment without OpenClaw runtime.
+- **hook-handler.test.js** (74 tests): Handler creation, skip logic, skip patterns (8), parseDateFromPath (5), applyTemporalDecay (7), tokenize (3), jaccardSimilarity (5), mmrFilter (6), fuzzy cache (3), handler integration (3). Uses `fakeApi()` stub.
+- **fts-search.test.js** (19 tests): FTS5 tokenization, query building, rank normalization, DB path resolution, search integration.
+- **query-enricher.test.js** (24 tests): Entity extraction (11) — file paths, error codes, CamelCase, package names, quoted strings, dedup. Temporal parsing (10) — yesterday, today, last week, N days ago. enrichQuery (3) — combined.
+- **utility-tracker.test.js** (14 tests): Injection recording, citation detection, Bayesian scoring, persistence (load/save), edge cases, clear, summary.
+- **metrics.test.js** (16 tests): All outcome types, latency percentiles, top score averages, FTS5 tracking, periodic logging, reset.
 
 ### Manual Verification
 

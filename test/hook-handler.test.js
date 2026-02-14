@@ -1,6 +1,18 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, getCallCount, resetCallCount, adaptiveFilter, PromptCache } from "../src/hook-handler.js";
+import {
+  createHandler,
+  getCallCount,
+  resetCallCount,
+  adaptiveFilter,
+  PromptCache,
+  matchesSkipPattern,
+  parseDateFromPath,
+  applyTemporalDecay,
+  tokenize,
+  jaccardSimilarity,
+  mmrFilter,
+} from "../src/hook-handler.js";
 
 // Fake api object matching OpenClawPluginApi shape
 function fakeApi(configOverrides = {}) {
@@ -63,7 +75,7 @@ describe("createHandler", () => {
   });
 
   it("does not skip prompts at or above threshold", async () => {
-    const handler = createHandler({ skipShortPrompts: 5, logInjections: false }, fakeApi());
+    const handler = createHandler({ skipShortPrompts: 5, logInjections: false, enableSkipPatterns: false }, fakeApi());
     // Will proceed to memory search (which fails gracefully in test env)
     const result = await handler({ prompt: "hello world, how are you?" }, fakeCtx);
     // Memory manager can't init in test env — returns undefined (no results)
@@ -127,12 +139,48 @@ describe("createHandler", () => {
     const api = fakeApi();
     api.logger.info = (msg) => logged.push(msg);
 
-    const handler = createHandler({ logInjections: true }, api);
+    const handler = createHandler({ logInjections: true, enableSkipPatterns: false }, api);
 
     await handler({ prompt: "a test prompt for cache" }, fakeCtx);
     await handler({ prompt: "a test prompt for cache" }, fakeCtx);
 
     assert.ok(logged.some((m) => m.includes("cache hit")));
+  });
+
+  it("skips prompts matching skip patterns", async () => {
+    const logged = [];
+    const api = fakeApi();
+    api.logger.info = (msg) => logged.push(msg);
+
+    const handler = createHandler({ logInjections: true, enableSkipPatterns: true }, api);
+    const result = await handler({ prompt: "write a poem about the ocean" }, fakeCtx);
+
+    assert.equal(result, undefined);
+    assert.ok(logged.some((m) => m.includes("skip") && m.includes("skip pattern")));
+  });
+
+  it("does not skip when enableSkipPatterns is false", async () => {
+    const handler = createHandler({ logInjections: false, enableSkipPatterns: false }, fakeApi());
+    // "write a poem" would normally be skipped, but patterns are disabled
+    const result = await handler({ prompt: "write a poem about the ocean" }, fakeCtx);
+    // Proceeds to memory search (fails in test env)
+    assert.equal(result, undefined);
+  });
+
+  it("uses custom skip patterns from config", async () => {
+    const logged = [];
+    const api = fakeApi();
+    api.logger.info = (msg) => logged.push(msg);
+
+    const handler = createHandler({
+      logInjections: true,
+      enableSkipPatterns: true,
+      skipPatterns: ["^deploy\\b"],
+    }, api);
+
+    const result = await handler({ prompt: "deploy the application to production" }, fakeCtx);
+    assert.equal(result, undefined);
+    assert.ok(logged.some((m) => m.includes("skip pattern")));
   });
 });
 
@@ -313,5 +361,318 @@ describe("PromptCache", () => {
     const result = cache.get("key");
     assert.deepEqual(result, []);
     assert.equal(result.length, 0);
+  });
+
+  it("returns fuzzy match for near-duplicate prompts", () => {
+    const cache = new PromptCache(10, 60000, 0.8); // 80% threshold
+    const results = [{ text: "match", score: 0.9 }];
+    cache.set("how do I configure the logging system", results);
+
+    // Very similar prompt (same words, slightly different phrasing)
+    const fuzzyHit = cache.get("how do I configure logging system");
+    assert.deepEqual(fuzzyHit, results);
+  });
+
+  it("does not fuzzy match dissimilar prompts", () => {
+    const cache = new PromptCache(10, 60000, 0.8);
+    cache.set("how do I configure the logging system", [{ text: "a", score: 0.9 }]);
+
+    // Very different prompt
+    const miss = cache.get("what is the deployment process for production");
+    assert.equal(miss, undefined);
+  });
+
+  it("disables fuzzy matching when threshold is 1.0", () => {
+    const cache = new PromptCache(10, 60000, 1.0);
+    const results = [{ text: "a", score: 0.9 }];
+    cache.set("exact match only test", results);
+
+    const miss = cache.get("exact match only testing");
+    assert.equal(miss, undefined); // Would fuzzy match at lower threshold
+  });
+});
+
+// -----------------------------------------------------------------------
+// matchesSkipPattern tests
+// -----------------------------------------------------------------------
+describe("matchesSkipPattern", () => {
+  it("matches creative prompts", () => {
+    assert.equal(matchesSkipPattern("write a poem about clouds"), true);
+    assert.equal(matchesSkipPattern("Write me a story"), true);
+    assert.equal(matchesSkipPattern("create a function that"), true);
+    assert.equal(matchesSkipPattern("generate a random number"), true);
+    assert.equal(matchesSkipPattern("imagine a world where"), true);
+    assert.equal(matchesSkipPattern("compose a song"), true);
+  });
+
+  it("matches procedural prompts", () => {
+    assert.equal(matchesSkipPattern("format this JSON"), true);
+    assert.equal(matchesSkipPattern("convert celsius to fahrenheit"), true);
+    assert.equal(matchesSkipPattern("translate this to Spanish"), true);
+    assert.equal(matchesSkipPattern("calculate the sum of 1+2+3"), true);
+  });
+
+  it("matches meta prompts", () => {
+    assert.equal(matchesSkipPattern("clear"), true);
+    assert.equal(matchesSkipPattern("reset everything"), true);
+    assert.equal(matchesSkipPattern("help me understand"), true);
+    assert.equal(matchesSkipPattern("thanks for the help"), true);
+    assert.equal(matchesSkipPattern("ok sounds good"), true);
+    assert.equal(matchesSkipPattern("yes please proceed"), true);
+    assert.equal(matchesSkipPattern("no that's not right"), true);
+    assert.equal(matchesSkipPattern("sure go ahead"), true);
+  });
+
+  it("does not match memory-worthy prompts", () => {
+    assert.equal(matchesSkipPattern("what did we discuss about the API design"), false);
+    assert.equal(matchesSkipPattern("fix the bug in the login flow"), false);
+    assert.equal(matchesSkipPattern("how does the authentication work"), false);
+    assert.equal(matchesSkipPattern("explain the NOAA scraper architecture"), false);
+    assert.equal(matchesSkipPattern("debug the deployment failure"), false);
+  });
+
+  it("is case-insensitive", () => {
+    assert.equal(matchesSkipPattern("WRITE a poem"), true);
+    assert.equal(matchesSkipPattern("Format this text"), true);
+    assert.equal(matchesSkipPattern("THANKS"), true);
+  });
+
+  it("only matches at start of string", () => {
+    assert.equal(matchesSkipPattern("please write a poem"), false);
+    assert.equal(matchesSkipPattern("can you create something"), false);
+    assert.equal(matchesSkipPattern("I need help with"), false);
+  });
+
+  it("supports custom string patterns", () => {
+    const patterns = ["^deploy\\b", "^rollback\\b"];
+    assert.equal(matchesSkipPattern("deploy the app", patterns), true);
+    assert.equal(matchesSkipPattern("rollback changes", patterns), true);
+    assert.equal(matchesSkipPattern("check deploy status", patterns), false);
+  });
+
+  it("handles empty patterns array", () => {
+    assert.equal(matchesSkipPattern("write a poem", []), false);
+  });
+});
+
+// -----------------------------------------------------------------------
+// parseDateFromPath tests
+// -----------------------------------------------------------------------
+describe("parseDateFromPath", () => {
+  it("parses YYYY-MM-DD from memory paths", () => {
+    const d = parseDateFromPath("memory/2026-02-12.md");
+    assert.equal(d.getUTCFullYear(), 2026);
+    assert.equal(d.getUTCMonth(), 1); // 0-indexed
+    assert.equal(d.getUTCDate(), 12);
+  });
+
+  it("parses date from nested paths", () => {
+    const d = parseDateFromPath("some/deep/path/2025-12-25.md");
+    assert.equal(d.getUTCFullYear(), 2025);
+    assert.equal(d.getUTCMonth(), 11);
+    assert.equal(d.getUTCDate(), 25);
+  });
+
+  it("returns null for paths without dates", () => {
+    assert.equal(parseDateFromPath("memory/notes.md"), null);
+    assert.equal(parseDateFromPath("src/index.js"), null);
+  });
+
+  it("returns null for null/empty/undefined", () => {
+    assert.equal(parseDateFromPath(null), null);
+    assert.equal(parseDateFromPath(""), null);
+    assert.equal(parseDateFromPath(undefined), null);
+  });
+
+  it("returns null for invalid dates", () => {
+    assert.equal(parseDateFromPath("memory/9999-99-99.md"), null);
+  });
+});
+
+// -----------------------------------------------------------------------
+// applyTemporalDecay tests
+// -----------------------------------------------------------------------
+describe("applyTemporalDecay", () => {
+  // Fixed "now" for deterministic tests: 2026-02-14 12:00:00 UTC
+  const NOW = new Date("2026-02-14T12:00:00Z").getTime();
+
+  it("returns empty array for null/undefined/empty", () => {
+    assert.deepEqual(applyTemporalDecay(null, 24, NOW), []);
+    assert.deepEqual(applyTemporalDecay(undefined, 24, NOW), []);
+    assert.deepEqual(applyTemporalDecay([], 24, NOW), []);
+  });
+
+  it("preserves score for results without dates", () => {
+    const results = [{ text: "a", score: 0.8, path: "notes.md" }];
+    const decayed = applyTemporalDecay(results, 24, NOW);
+    assert.equal(decayed[0].score, 0.8);
+  });
+
+  it("reduces score for older results", () => {
+    const results = [
+      { text: "old", score: 0.9, path: "memory/2026-02-10.md" }, // 4+ days old
+      { text: "new", score: 0.8, path: "memory/2026-02-14.md" }, // same day
+    ];
+    const decayed = applyTemporalDecay(results, 24, NOW);
+
+    // New result should have higher score than old after decay
+    const newResult = decayed.find((r) => r.text === "new");
+    const oldResult = decayed.find((r) => r.text === "old");
+    assert.ok(newResult.score > oldResult.score);
+  });
+
+  it("re-sorts by decayed score", () => {
+    const results = [
+      { text: "old-high", score: 0.95, path: "memory/2026-01-01.md" }, // very old
+      { text: "new-low", score: 0.5, path: "memory/2026-02-14.md" },  // today
+    ];
+    const decayed = applyTemporalDecay(results, 24, NOW);
+
+    // Recent low-score should now outrank ancient high-score
+    assert.equal(decayed[0].text, "new-low");
+  });
+
+  it("preserves original score in _originalScore", () => {
+    const results = [{ text: "a", score: 0.9, path: "memory/2026-02-10.md" }];
+    const decayed = applyTemporalDecay(results, 24, NOW);
+    assert.equal(decayed[0]._originalScore, 0.9);
+    assert.ok(decayed[0].score < 0.9);
+  });
+
+  it("returns results unchanged when halfLifeHours <= 0", () => {
+    const results = [{ text: "a", score: 0.9, path: "memory/2026-01-01.md" }];
+    const decayed = applyTemporalDecay(results, 0, NOW);
+    assert.equal(decayed[0].score, 0.9);
+  });
+
+  it("applies ~50% decay at exactly half-life", () => {
+    // Half-life = 24 hours, age = 24 hours (yesterday)
+    const yesterday = new Date(NOW - 24 * 60 * 60 * 1000);
+    const dateStr = yesterday.toISOString().split("T")[0];
+    const results = [{ text: "a", score: 1.0, path: `memory/${dateStr}.md` }];
+    const decayed = applyTemporalDecay(results, 24, NOW);
+
+    // Score should be ~0.5 (exp(-ln2) = 0.5), but path dates are midnight-based
+    // so age might not be exactly 24h. Allow some tolerance.
+    assert.ok(decayed[0].score > 0.3 && decayed[0].score < 0.7,
+      `Expected ~0.5 decay, got ${decayed[0].score}`);
+  });
+});
+
+// -----------------------------------------------------------------------
+// tokenize + jaccardSimilarity tests
+// -----------------------------------------------------------------------
+describe("tokenize", () => {
+  it("tokenizes to lowercase word set", () => {
+    const tokens = tokenize("Hello World hello");
+    assert.ok(tokens.has("hello"));
+    assert.ok(tokens.has("world"));
+    assert.equal(tokens.size, 2); // deduped
+  });
+
+  it("handles empty string", () => {
+    assert.equal(tokenize("").size, 0);
+  });
+
+  it("strips punctuation", () => {
+    const tokens = tokenize("hello, world! how's it going?");
+    assert.ok(tokens.has("hello"));
+    assert.ok(tokens.has("world"));
+    assert.ok(tokens.has("how"));
+    assert.ok(tokens.has("s"));
+    assert.ok(tokens.has("it"));
+    assert.ok(tokens.has("going"));
+  });
+});
+
+describe("jaccardSimilarity", () => {
+  it("returns 1 for identical sets", () => {
+    const a = new Set(["hello", "world"]);
+    const b = new Set(["hello", "world"]);
+    assert.equal(jaccardSimilarity(a, b), 1);
+  });
+
+  it("returns 0 for disjoint sets", () => {
+    const a = new Set(["hello"]);
+    const b = new Set(["world"]);
+    assert.equal(jaccardSimilarity(a, b), 0);
+  });
+
+  it("returns correct value for partial overlap", () => {
+    const a = new Set(["a", "b", "c"]);
+    const b = new Set(["b", "c", "d"]);
+    // intersection=2, union=4
+    assert.equal(jaccardSimilarity(a, b), 0.5);
+  });
+
+  it("returns 1 for two empty sets", () => {
+    assert.equal(jaccardSimilarity(new Set(), new Set()), 1);
+  });
+
+  it("returns 0 when one set is empty", () => {
+    assert.equal(jaccardSimilarity(new Set(["a"]), new Set()), 0);
+    assert.equal(jaccardSimilarity(new Set(), new Set(["a"])), 0);
+  });
+});
+
+// -----------------------------------------------------------------------
+// mmrFilter tests
+// -----------------------------------------------------------------------
+describe("mmrFilter", () => {
+  it("returns empty array for null/undefined/empty", () => {
+    assert.deepEqual(mmrFilter(null), []);
+    assert.deepEqual(mmrFilter(undefined), []);
+    assert.deepEqual(mmrFilter([]), []);
+  });
+
+  it("returns single result unchanged", () => {
+    const results = [{ text: "only one", score: 0.9 }];
+    assert.deepEqual(mmrFilter(results), results);
+  });
+
+  it("always selects first result (highest score)", () => {
+    const results = [
+      { text: "best match found here", score: 0.9 },
+      { text: "second best match here", score: 0.7 },
+    ];
+    const filtered = mmrFilter(results, 0.7);
+    assert.equal(filtered[0].text, "best match found here");
+  });
+
+  it("penalizes redundant results", () => {
+    const results = [
+      { text: "the cat sat on the mat", score: 0.9 },
+      { text: "the cat sat on the mat today", score: 0.85 }, // very similar
+      { text: "the dog ran through the park", score: 0.7 },  // diverse
+    ];
+    const filtered = mmrFilter(results, 0.7, 2);
+
+    assert.equal(filtered.length, 2);
+    assert.equal(filtered[0].text, "the cat sat on the mat");
+    // Second result should be the diverse one, not the near-duplicate
+    assert.equal(filtered[1].text, "the dog ran through the park");
+  });
+
+  it("respects maxResults", () => {
+    const results = [
+      { text: "result one about coding", score: 0.9 },
+      { text: "result two about testing", score: 0.8 },
+      { text: "result three about deployment", score: 0.7 },
+    ];
+    const filtered = mmrFilter(results, 0.7, 2);
+    assert.equal(filtered.length, 2);
+  });
+
+  it("with lambda=1.0 acts as pure relevance (no diversity penalty)", () => {
+    const results = [
+      { text: "identical content here", score: 0.9 },
+      { text: "identical content here", score: 0.8 }, // exact duplicate
+      { text: "different content entirely", score: 0.7 },
+    ];
+    const filtered = mmrFilter(results, 1.0, 3);
+    // Lambda=1.0 means no diversity penalty, so order follows score
+    assert.equal(filtered[0].score, 0.9);
+    assert.equal(filtered[1].score, 0.8);
+    assert.equal(filtered[2].score, 0.7);
   });
 });
