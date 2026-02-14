@@ -462,7 +462,7 @@ export function createHandler(config, api) {
               const boost = ftsBoostWeight * ftsScore;
               result._ftsScore = ftsScore;
               result._originalScore = result.score;
-              result.score = result.score + boost;
+              result.score = Math.min(1, result.score + boost);
               ftsHits++;
             }
           }
