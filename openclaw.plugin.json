@@ -74,7 +74,7 @@
       "enableTemporalParsing": {
         "type": "boolean",
         "default": false,
-        "description": "Parse temporal expressions (yesterday, last week) from prompts"
+        "description": "Parse temporal expressions (yesterday, last week) from prompts. Diagnostic-only: results are logged but not used for search filtering."
       },
       "enableFeedbackLoop": {
         "type": "boolean",

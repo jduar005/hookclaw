@@ -80,9 +80,8 @@ export function extractEntities(prompt) {
  * Supports:
  * - "yesterday" -> previous day
  * - "today" -> current day
- * - "last week" -> past 7 days
+ * - "(last|this|past) week" -> past 7 days
  * - "last N days/hours" -> past N days/hours
- * - "this week" -> current week (Mon-Sun)
  * - "N days ago" -> specific day
  *
  * @param {string} prompt

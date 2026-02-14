@@ -90,15 +90,14 @@ describe("MetricsCollector", () => {
     assert.ok(Math.abs(snap.topScoreAvg - 0.7) < 0.01);
   });
 
-  it("tracks BM25 and RRF usage", () => {
+  it("tracks FTS5 usage", () => {
     const m = new MetricsCollector();
-    m.record({ outcome: "injection", bm25Used: true, rrfUsed: true });
-    m.record({ outcome: "injection", bm25Used: true });
+    m.record({ outcome: "injection", ftsUsed: true });
+    m.record({ outcome: "injection", ftsUsed: true });
     m.record({ outcome: "injection" });
 
     const snap = m.getSnapshot();
-    assert.equal(snap.bm25Used, 2);
-    assert.equal(snap.rrfUsed, 1);
+    assert.equal(snap.ftsUsed, 2);
   });
 
   it("handles empty latency stats", () => {

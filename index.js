@@ -105,7 +105,7 @@ async function registerFeedbackHook(api, config) {
 
         // Record metrics
         metrics.record({
-          outcome: responseText ? "injection" : "no_results",
+          outcome: responseText ? "response" : "no_response",
         });
       } catch {
         // Non-fatal

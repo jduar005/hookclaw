@@ -97,15 +97,15 @@ All of Phases 1-3 were implemented as **pure ES modules with zero external depen
 | Phase | Status | New Tests | Key Files |
 |-------|--------|-----------|-----------|
 | Phase 1: Zero-Cost Heuristics | COMPLETE | +25 | `src/hook-handler.js` (modified) |
-| Phase 2: Hybrid Retrieval | COMPLETE | +50 | `src/bm25-index.js`, `src/rank-fusion.js`, `src/query-enricher.js` |
+| Phase 2: Hybrid Retrieval | SUPERSEDED by v2.1 | +19 | `src/fts-search.js` (replaced BM25/RRF with direct FTS5), `src/query-enricher.js` |
 | Phase 3: Feedback Loop | COMPLETE | +30 | `src/utility-tracker.js`, `src/metrics.js`, `index.js` (modified) |
 | Phase 4: Advanced Optimizations | NOT STARTED | — | Deferred by design (measure first) |
 
 ### Key Design Decisions During Implementation
 
 1. **Zero dependencies**: BM25, RRF, temporal parsing, entity extraction all implemented as pure JS instead of npm packages. This keeps the plugin lightweight and eliminates supply-chain risk.
-2. **All v2.0 features are opt-in**: Defaults match v1.1.0 behavior. Only `enableSkipPatterns`, `enableMmr`, and `halfLifeHours` are enabled by default (zero-cost heuristics). BM25, RRF, temporal parsing, and feedback loop must be explicitly enabled.
-3. **Lazy module loading**: Phase 2 modules (bm25, rank-fusion, query-enricher) are loaded via dynamic `import()` on first use, not at startup. If loading fails, the feature is silently disabled.
+2. **All v2.x features are opt-in**: Defaults match v1.1.0 behavior except `enableFts` (on by default in v2.1 — FTS5 is the core improvement). Temporal parsing and feedback loop must be explicitly enabled.
+3. **Lazy module loading**: Phase 2 modules (fts-search, query-enricher) are loaded via dynamic `import()` on first use, not at startup. If loading fails, the feature is silently disabled. BM25/RRF modules were removed in v2.1 — replaced by direct FTS5 queries.
 4. **Citation detection fixed**: Initial implementation matched on chunk path keys (e.g., "good.md") for citation detection. Fixed to match against chunk TEXT content instead, using 30% word overlap threshold.
 5. **Error code regex**: Entity extraction requires error codes to contain at least one digit (e.g., `NETSDK1005`, not `ERR_MODULE_NOT_FOUND`). This prevents false positives on common uppercase constants.
 

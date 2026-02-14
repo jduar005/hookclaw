@@ -2,8 +2,8 @@
  * before_agent_start hook handler — orchestrates memory search
  * and context injection into prompts.
  *
- * v2.1: Simplified retrieval pipeline — delegates hybrid search
- * (vector + FTS5 keyword) to OpenClaw's native implementation.
+ * v2.1: Hybrid search — runs direct FTS5 keyword queries via node:sqlite
+ * against OpenClaw's chunks_fts table, boosts vector results additively.
  * Retains temporal decay, skip patterns, fuzzy cache, MMR diversity.
  */
 
@@ -170,6 +170,13 @@ class PromptCache {
       }
 
       if (bestMatch) {
+        // Refresh LRU position: delete and re-insert to move to end
+        const matchKey = [...this._map.entries()]
+          .find(([, v]) => v === bestMatch)?.[0];
+        if (matchKey) {
+          this._map.delete(matchKey);
+          this._map.set(matchKey, bestMatch);
+        }
         return bestMatch.results;
       }
     }
@@ -319,9 +326,15 @@ export function createHandler(config, api) {
   const runtime = api.runtime;
   const cache = new PromptCache(cacheSize, cacheTtlMs, fuzzyCacheThreshold);
 
-  // Compile skip patterns once at init
+  // Compile skip patterns once at init (invalid user patterns are warned and skipped)
   const compiledSkipPatterns = skipPatterns
-    ? skipPatterns.map((p) => (p instanceof RegExp ? p : new RegExp(p, "i")))
+    ? skipPatterns.reduce((acc, p) => {
+        if (p instanceof RegExp) { acc.push(p); return acc; }
+        try { acc.push(new RegExp(p, "i")); } catch {
+          logger.warn(`hookclaw: invalid skip pattern ignored: "${p}"`);
+        }
+        return acc;
+      }, [])
     : DEFAULT_SKIP_PATTERNS;
 
   // Lazy-load query enricher (temporal parsing, entity extraction)

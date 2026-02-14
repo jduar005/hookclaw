@@ -1,6 +1,6 @@
 # HookClaw Architecture & Technical Guide
 
-> **Version**: 2.0.0 (on `feature/v2-multi-signal-retrieval` branch)
+> **Version**: 2.1.0 (on `feature/v2-multi-signal-retrieval` branch)
 > **v1.1.0** (on `master`) is what's deployed to VMs
 
 ## Overview
@@ -335,15 +335,15 @@ All config lives in `~/.openclaw/openclaw.json` under `plugins.entries.hookclaw.
 | `cacheSize` | 20 | 1-100 | LRU cache entries |
 | `cacheTtlMs` | 300000 | 1000-3600000 | Cache TTL (5 min default) |
 | `adaptiveResults` | true | bool | Vary result count by score quality |
-| **v2.0 options** | | | |
-| `halfLifeHours` | 24 | 0-720 | Temporal decay half-life (0 = disabled) |
+| **v2.1 options** | | | |
+| `halfLifeHours` | 168 | 0-720 | Temporal decay half-life in hours (0 = disabled) |
 | `enableSkipPatterns` | true | bool | Intent-gating skip patterns |
 | `skipPatterns` | null | string[] | Custom regex patterns (null = built-in defaults) |
-| `enableBm25` | false | bool | BM25 keyword search |
-| `enableRrf` | false | bool | Reciprocal Rank Fusion |
-| `rrfWeights` | {v:0.4,b:0.3,r:0.2,e:0.1} | object | Signal weights for RRF |
-| `rrfK` | 60 | 1-200 | RRF constant (higher = more conservative) |
-| `enableTemporalParsing` | false | bool | Parse temporal expressions |
+| `enableFts` | true | bool | Direct FTS5 keyword search to boost vector results |
+| `ftsBoostWeight` | 0.3 | 0.0-1.0 | FTS5 boost weight added to vector score |
+| `ftsDbPath` | null | string | Override path to OpenClaw SQLite database |
+| `ftsAgentId` | "main" | string | OpenClaw agent ID for database path resolution |
+| `enableTemporalParsing` | false | bool | Parse temporal expressions (diagnostic-only) |
 | `enableFeedbackLoop` | false | bool | agent_end feedback hook |
 | `enableMmr` | true | bool | MMR diversity filtering |
 | `mmrLambda` | 0.7 | 0.0-1.0 | MMR relevance vs diversity (1=all relevance) |

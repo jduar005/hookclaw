@@ -1,10 +1,10 @@
 # HookClaw — OpenClaw Memory RAG Plugin
 
-> **v2.0** on `feature/v2-multi-signal-retrieval` branch | **v1.1.0** on `master` (deployed)
+> **v2.1** on `feature/v2-multi-signal-retrieval` branch | **v1.1.0** on `master` (deployed)
 
 Multi-signal memory retrieval plugin — automatically injects relevant memories into every prompt via the `before_agent_start` hook. No more context loss after compaction.
 
-**v2.0 features**: Hybrid search (vector + BM25), RRF rank fusion, temporal decay, MMR diversity, intent-gating skip patterns, fuzzy semantic cache, entity extraction, temporal parsing, feedback loop via `agent_end` hook. Zero external dependencies.
+**v2.1 features**: Direct FTS5 keyword search (boosts vector scores), temporal decay, MMR diversity, intent-gating skip patterns, fuzzy semantic cache, entity extraction, temporal parsing, feedback loop via `agent_end` hook. Zero external dependencies.
 
 ## Why?
 
@@ -76,7 +76,7 @@ You can also verify via the CLI:
 
 ```bash
 openclaw plugins list
-# Should show: HookClaw Memory RAG | hookclaw | loaded | ~/hookclaw/index.js | 2.0.0
+# Should show: HookClaw Memory RAG | hookclaw | loaded | ~/hookclaw/index.js | 2.1.0
 ```
 
 ## Configuration
@@ -115,18 +115,18 @@ This merges with your existing `openclaw.json` — you only need to add the `hoo
 | `cacheTtlMs` | 300000 | Cache TTL in ms (default 5 min) |
 | `adaptiveResults` | true | Vary result count based on score quality |
 
-#### v2.0 Options (all opt-in)
+#### v2.1 Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `halfLifeHours` | 24 | Temporal decay half-life in hours (0 = disabled) |
+| `halfLifeHours` | 168 | Temporal decay half-life in hours (0 = disabled) |
 | `enableSkipPatterns` | true | Intent-gating: skip creative/procedural/meta prompts |
 | `skipPatterns` | null | Custom regex patterns (null = built-in defaults) |
-| `enableBm25` | false | BM25 keyword search alongside vector search |
-| `enableRrf` | false | Reciprocal Rank Fusion to merge search signals |
-| `rrfWeights` | `{vector:0.4, bm25:0.3, recency:0.2, entity:0.1}` | Signal weights |
-| `rrfK` | 60 | RRF constant (higher = more conservative fusion) |
-| `enableTemporalParsing` | false | Parse "yesterday", "last week" from prompts |
+| `enableFts` | true | Direct FTS5 keyword search to boost vector results |
+| `ftsBoostWeight` | 0.3 | FTS5 boost weight added to vector score (0-1) |
+| `ftsDbPath` | null | Override path to OpenClaw SQLite database (null = auto-discover) |
+| `ftsAgentId` | `"main"` | OpenClaw agent ID for database path resolution |
+| `enableTemporalParsing` | false | Parse "yesterday", "last week" from prompts (diagnostic-only) |
 | `enableFeedbackLoop` | false | `agent_end` hook for utility score tracking |
 | `enableMmr` | true | MMR diversity filtering to remove duplicate memories |
 | `mmrLambda` | 0.7 | MMR relevance vs diversity (0=max diversity, 1=max relevance) |
@@ -204,18 +204,16 @@ Controls total character limit across all injected chunks. Chunks are included i
 { "maxResults": 5, "minScore": 0.45, "maxContextChars": 4000, "skipShortPrompts": 15 }
 ```
 
-**Full v2.0 features (all signals enabled):**
+**Full v2.1 features (all signals enabled):**
 ```json
 {
   "maxResults": 3,
-  "minScore": 0.5,
-  "enableBm25": true,
-  "enableRrf": true,
-  "enableTemporalParsing": true,
-  "enableFeedbackLoop": true,
+  "minScore": 0.45,
+  "enableFts": true,
+  "ftsBoostWeight": 0.3,
   "enableMmr": true,
   "enableSkipPatterns": true,
-  "halfLifeHours": 24,
+  "halfLifeHours": 168,
   "fuzzyCacheThreshold": 0.85
 }
 ```
@@ -271,12 +269,12 @@ Chunk text here...
 node --test test/*.test.js
 ```
 
-**169 tests** across 22 suites covering: handler logic, skip patterns, temporal decay, fuzzy cache, MMR diversity, BM25 indexing, RRF fusion, entity extraction, temporal parsing, utility tracking, metrics collection, context formatting.
+**162 tests** across 23 suites covering: handler logic, skip patterns, temporal decay, fuzzy cache, MMR diversity, FTS5 keyword search, entity extraction, temporal parsing, utility tracking, metrics collection, context formatting.
 
 ### Branching Workflow
 
 - **`master`** = deployed on VMs (v1.1.0)
-- **`feature/v2-multi-signal-retrieval`** = v2.0 work (Phases 1-3)
+- **`feature/v2-multi-signal-retrieval`** = v2.1 (burn-in on Axle VM)
 
 See `docs/HOOKCLAW-OPTIMIZATION-ROADMAP.md` for the full VM testing strategy.
 

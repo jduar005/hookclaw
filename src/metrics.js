@@ -36,8 +36,7 @@ export class MetricsCollector {
     this._topScores = [];
 
     // Signal usage
-    this._bm25Used = 0;
-    this._rrfUsed = 0;
+    this._ftsUsed = 0;
 
     // Start time
     this._startTime = Date.now();
@@ -51,8 +50,7 @@ export class MetricsCollector {
    * @param {number} [event.latencyMs] - Call latency
    * @param {number} [event.topScore] - Top result score
    * @param {number} [event.resultCount] - Number of results
-   * @param {boolean} [event.bm25Used] - BM25 signal used
-   * @param {boolean} [event.rrfUsed] - RRF fusion used
+   * @param {boolean} [event.ftsUsed] - FTS5 keyword boost used
    */
   record(event) {
     this._totalCalls++;
@@ -92,8 +90,7 @@ export class MetricsCollector {
       }
     }
 
-    if (event.bm25Used) this._bm25Used++;
-    if (event.rrfUsed) this._rrfUsed++;
+    if (event.ftsUsed) this._ftsUsed++;
 
     // Periodic summary
     if (this._summaryInterval > 0 && this._totalCalls % this._summaryInterval === 0) {
@@ -118,8 +115,7 @@ export class MetricsCollector {
       errors: this._errors,
       latency: this._computeLatencyStats(),
       topScoreAvg: this._computeAverage(this._topScores),
-      bm25Used: this._bm25Used,
-      rrfUsed: this._rrfUsed,
+      ftsUsed: this._ftsUsed,
       uptimeMs,
     };
   }
@@ -139,7 +135,7 @@ export class MetricsCollector {
       `${(snap.cacheHitRate * 100).toFixed(0)}% cache | ` +
       `p50=${latency.p50}ms p95=${latency.p95}ms | ` +
       `avg_score=${snap.topScoreAvg.toFixed(3)} | ` +
-      `bm25=${snap.bm25Used} rrf=${snap.rrfUsed}`
+      `fts=${snap.ftsUsed}`
     );
   }
 

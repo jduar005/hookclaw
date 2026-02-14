@@ -171,7 +171,7 @@ export class UtilityTracker {
       return 0.5; // Neutral default
     }
 
-    // Bayesian smoothed estimate: (citations + prior) / (retrievals + prior*2)
+    // Bayesian smoothed estimate: (citations + 1) / (retrievals + 2)
     return (entry.citations + BAYESIAN_PRIOR_CITATIONS) /
            (entry.retrievals + BAYESIAN_PRIOR);
   }
@@ -230,6 +230,7 @@ export class UtilityTracker {
     this._scores.clear();
     this._pendingInjections.clear();
     this._dirty = true;
+    this._scheduleSave();
   }
 
   /**
