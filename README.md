@@ -2,26 +2,82 @@
 
 Automatically injects relevant memories into every prompt via the `before_agent_start` hook. No more context loss after compaction.
 
+## Why?
+
+OpenClaw agents lose context after compaction. The built-in `memory-core` plugin indexes your conversations, but the agent only searches memory when it *decides* to — which means important context silently disappears when the context window fills up.
+
+HookClaw fixes this by intercepting every prompt *before* the model starts reasoning. It embeds the prompt, searches the memory vector index, and prepends the top-k relevant chunks as context. The model sees relevant memories alongside the user's message without any agent-side tool calls.
+
+**Result:** Your agent remembers what you discussed yesterday, last week, or last month — automatically, on every message.
+
 ## How It Works
 
-1. OpenClaw fires `before_agent_start` before the model processes each prompt
-2. HookClaw embeds the prompt and searches the memory vector index
-3. Top-k relevant memories are formatted as XML (or markdown) context
-4. Context is prepended to the prompt via `prependContext`
+1. User sends a message (Telegram, WhatsApp, etc.)
+2. OpenClaw fires `before_agent_start` before the model processes the prompt
+3. HookClaw embeds the prompt via the configured embedding provider (e.g. Gemini)
+4. The embedding is searched against the memory vector index (SQLite + sqlite-vec)
+5. Top-k results above the similarity threshold are formatted as XML context
+6. Context is returned via `{ prependContext }` — OpenClaw prepends it to the prompt
+7. The model sees: `[relevant memories] + [user's message]`
 
-The model sees relevant memories alongside the user's message without any agent-side tool calls.
+Typical latency: **150-350ms** (embedding API is the bottleneck; SQLite vector search is <20ms).
+
+## Prerequisites
+
+- **OpenClaw** v2026.2.9 or later (requires plugin SDK with `before_agent_start` hook support)
+- **Node.js** 20+ (uses ES modules, `node:test` runner)
+- **memory-core** plugin enabled and configured — HookClaw searches the index that memory-core builds. Without memory-core, there's nothing to search.
+
+Verify memory-core is active and has indexed content:
+
+```bash
+openclaw memory status --json
+# Look for: "files": N, "chunks": N (both should be > 0)
+```
+
+If `chunks: 0`, you need to build the index first. Memory-core indexes files in your workspace's `memory/` directory. See [OpenClaw memory docs](https://docs.openclaw.ai/cli/memory) for setup.
 
 ## Installation
 
 ```bash
+# Clone the plugin
 git clone https://github.com/jduar005/hookclaw.git ~/hookclaw
+
+# Install as a linked plugin (symlink — enables live editing)
 openclaw plugins install --link ~/hookclaw
-systemctl --user restart openclaw-gateway
+
+# Restart the gateway to load the plugin
+systemctl --user restart openclaw-gateway    # Linux (systemd)
+# — or —
+launchctl kickstart -k gui/$(id -u)/openclaw-gateway   # macOS (launchd)
+# — or —
+openclaw gateway restart                     # If running manually / Docker
+```
+
+### Verify installation
+
+After restart, check the gateway logs for the registration message:
+
+```bash
+journalctl --user -u openclaw-gateway --since "1 min ago" | grep hookclaw
+```
+
+Expected output:
+
+```
+hookclaw: registered before_agent_start hook (maxResults=3, minScore=0.5, timeout=2000ms, format=xml)
+```
+
+You can also verify via the CLI:
+
+```bash
+openclaw plugins list
+# Should show: HookClaw Memory RAG | hookclaw | loaded | ~/hookclaw/index.js | 1.1.0
 ```
 
 ## Configuration
 
-Override defaults in `~/.openclaw/openclaw.json`:
+All settings are optional. HookClaw works out of the box with sensible defaults. To override, add a `config` block to the plugin entry in `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -32,17 +88,15 @@ Override defaults in `~/.openclaw/openclaw.json`:
         "config": {
           "maxResults": 3,
           "minScore": 0.5,
-          "maxContextChars": 2000,
-          "timeoutMs": 2000,
-          "logInjections": true,
-          "formatTemplate": "xml",
-          "skipShortPrompts": 20
+          "maxContextChars": 2000
         }
       }
     }
   }
 }
 ```
+
+This merges with your existing `openclaw.json` — you only need to add the `hookclaw` key inside `plugins.entries`. Any keys you omit use the defaults below.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -51,10 +105,18 @@ Override defaults in `~/.openclaw/openclaw.json`:
 | `maxContextChars` | 2000 | Max total characters of injected context |
 | `timeoutMs` | 2000 | Memory search timeout (ms) |
 | `logInjections` | true | Log injection/skip events to gateway logs |
-| `formatTemplate` | "xml" | Context format: `"xml"` or `"markdown"` |
+| `formatTemplate` | `"xml"` | Context format: `"xml"` or `"markdown"` |
 | `skipShortPrompts` | 20 | Skip prompts shorter than N chars (saves embedding calls) |
+| `cacheSize` | 20 | Max entries in the prompt dedup LRU cache |
+| `cacheTtlMs` | 300000 | Cache TTL in ms (default 5 min) |
+| `adaptiveResults` | true | Vary result count based on score quality |
 
-All settings are optional — omit any key to use the default.
+### Glossary
+
+- **Memory index** — The SQLite database where memory-core stores embedded chunks of your conversation history and memory files. Located at `~/.openclaw/memory/main.sqlite`.
+- **Chunk** — A section of a memory file (typically 15-40 lines) that has been embedded as a vector. Each chunk is independently searchable.
+- **Similarity score** — A 0-1 value indicating how semantically similar a chunk is to the current prompt. Higher = more relevant. Produced by comparing embedding vectors.
+- **Embedding provider** — The API used to convert text into vectors (e.g. Gemini `embedding-001`, OpenAI `text-embedding-3-small`). Configured in memory-core, not HookClaw.
 
 ## Tuning Guide
 
@@ -129,6 +191,7 @@ With `logInjections: true`, every prompt produces a log line:
 hookclaw: #1 injecting 3 memories (189ms, top score: 0.529)   — context injected
 hookclaw: #2 no relevant memories found (193ms)                — searched but nothing passed minScore
 hookclaw: #3 skip — prompt too short (5 chars)                 — skipped entirely, no API call
+hookclaw: #4 cache hit (0ms)                                   — same prompt seen recently, reused result
 ```
 
 OpenClaw's own `agent/embedded` subsystem independently confirms each injection:
@@ -136,6 +199,8 @@ OpenClaw's own `agent/embedded` subsystem independently confirms each injection:
 ```
 hooks: prepended context to prompt (1847 chars)
 ```
+
+If you see the first line but not the second, the hook returned context but OpenClaw didn't apply it — check your OpenClaw version supports `prependContext` in hook results.
 
 ## Context Format
 
@@ -167,19 +232,50 @@ Chunk text here...
 node --test test/*.test.js
 ```
 
+49 tests covering handler logic, context formatting, prompt cache, and adaptive filtering.
+
 ## Error Handling
 
 Every failure mode is non-fatal — the prompt passes through unmodified:
 
-- Memory search tool unavailable: logged once, all future searches skipped
-- Embedding API timeout: caught by timeout race
-- SQLite errors: graceful fallback
-- Handler throws: caught by OpenClaw hook runner (`catchErrors: true`)
+- **Memory search tool unavailable:** Logged once, all future searches skipped for the session
+- **Embedding API timeout:** Caught by `Promise.race` with configurable `timeoutMs`
+- **SQLite errors:** Graceful fallback, returns empty results
+- **Handler throws:** Caught by OpenClaw hook runner (`catchErrors: true`)
+
+If HookClaw fails, the user's prompt still reaches the model — just without memory context.
+
+## Troubleshooting
+
+**Plugin doesn't appear in `openclaw plugins list`:**
+- Verify `package.json` contains `"openclaw": { "extensions": ["./index.js"] }`
+- Re-run `openclaw plugins install --link ~/hookclaw`
+- Check gateway logs for plugin load errors
+
+**`no relevant memories found` on every prompt:**
+- Check `openclaw memory status --json` — if `chunks: 0`, the memory index is empty
+- Your `minScore` may be too high — try lowering to 0.45
+- The embedding provider may differ between memory-core indexing and HookClaw search (they must match)
+
+**`memory search tool unavailable` in logs:**
+- The `memory-core` plugin isn't loaded or configured
+- Check `openclaw plugins list` — memory-core should show as `loaded`
+
+**High latency (>500ms):**
+- Embedding API latency dominates — this is normal for remote providers like Gemini
+- Check if embedding cache is enabled (`openclaw memory status --json` → `cache.enabled: true`)
+- Consider enabling batch embeddings for bulk indexing
 
 ## Verification
 
-1. Check gateway logs for `hookclaw: registered before_agent_start hook` on startup
-2. Send a message that relates to indexed memories
-3. Verify logs show: `hookclaw: #1 injecting N memories (Xms, top score: X.XXX)`
-4. Verify OpenClaw confirms: `hooks: prepended context to prompt (XXXX chars)`
-5. Send "hi" — verify skip: `hookclaw: #1 skip — prompt too short`
+Full end-to-end verification checklist:
+
+1. **Startup:** Check gateway logs for `hookclaw: registered before_agent_start hook`
+2. **Generic prompt:** Send "hello" — should see `skip — prompt too short` (no API call wasted)
+3. **Relevant prompt:** Send a message about something in your memory index — should see `injecting N memories`
+4. **Gateway confirmation:** Same log timestamp should show `hooks: prepended context to prompt (XXXX chars)`
+5. **Irrelevant prompt:** Send something unrelated to any memory — should see `no relevant memories found`
+
+## License
+
+MIT — see [LICENSE](LICENSE).
