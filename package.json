@@ -1,13 +1,13 @@
 {
   "name": "hookclaw",
-  "version": "2.0.0",
-  "description": "OpenClaw Memory RAG Plugin — multi-signal memory retrieval with hybrid search, RRF fusion, and self-improving feedback",
+  "version": "2.1.0",
+  "description": "OpenClaw Memory RAG Plugin — memory retrieval via native hybrid search with temporal decay, MMR diversity, and feedback",
   "type": "module",
   "main": "index.js",
   "scripts": {
     "test": "node --test test/*.test.js"
   },
-  "keywords": ["openclaw", "plugin", "memory", "rag", "bm25", "rrf", "hybrid-search"],
+  "keywords": ["openclaw", "plugin", "memory", "rag", "hybrid-search"],
   "author": "JP",
   "license": "MIT",
   "engines": {

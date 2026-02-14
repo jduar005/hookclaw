@@ -1,9 +1,8 @@
 /**
- * HookClaw v2.0 — OpenClaw Memory RAG Plugin
+ * HookClaw v2.1 — OpenClaw Memory RAG Plugin
  *
- * Multi-signal memory retrieval with:
- * - Vector search + BM25 hybrid retrieval
- * - RRF rank fusion
+ * Memory retrieval with:
+ * - Native hybrid search (vector + FTS5 keyword via OpenClaw)
  * - Temporal decay scoring
  * - MMR diversity filtering
  * - Intent-gating skip patterns
@@ -22,14 +21,10 @@ const DEFAULTS = {
   logInjections: true,
   formatTemplate: "xml",
   skipShortPrompts: 20,
-  // v2.0 defaults
+  // v2.1 defaults
   halfLifeHours: 24,
   skipPatterns: null,
   enableSkipPatterns: true,
-  enableBm25: false,
-  enableRrf: false,
-  rrfWeights: { vector: 0.4, bm25: 0.3, recency: 0.2, entity: 0.1 },
-  rrfK: 60,
   enableTemporalParsing: false,
   enableFeedbackLoop: false,
   mmrLambda: 0.7,
@@ -50,8 +45,8 @@ function resolveConfig(userConfig) {
 export default {
   id: "hookclaw",
   name: "HookClaw Memory RAG",
-  description: "Multi-signal memory retrieval — injects relevant memories into prompts via hybrid search, RRF fusion, and self-improving feedback",
-  version: "2.0.0",
+  description: "Memory retrieval — injects relevant memories into prompts via OpenClaw native hybrid search with temporal decay, MMR diversity, and feedback",
+  version: "2.1.0",
 
   /**
    * Called by OpenClaw plugin loader on startup.
@@ -65,9 +60,9 @@ export default {
     api.on("before_agent_start", handler, { priority: 10 });
 
     api.logger.info(
-      `hookclaw: registered before_agent_start hook (v2.0, maxResults=${config.maxResults}, ` +
+      `hookclaw: registered before_agent_start hook (v2.1, maxResults=${config.maxResults}, ` +
         `minScore=${config.minScore}, timeout=${config.timeoutMs}ms, format=${config.formatTemplate}, ` +
-        `bm25=${config.enableBm25}, rrf=${config.enableRrf}, mmr=${config.enableMmr})`
+        `mmr=${config.enableMmr})`
     );
 
     // Register feedback hook: agent_end (Phase 3)

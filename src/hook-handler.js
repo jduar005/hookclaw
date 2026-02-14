@@ -2,8 +2,9 @@
  * before_agent_start hook handler — orchestrates memory search
  * and context injection into prompts.
  *
- * v2.0: Multi-signal retrieval with temporal decay, skip patterns,
- * fuzzy cache, MMR diversity, BM25 hybrid search, and RRF fusion.
+ * v2.1: Simplified retrieval pipeline — delegates hybrid search
+ * (vector + FTS5 keyword) to OpenClaw's native implementation.
+ * Retains temporal decay, skip patterns, fuzzy cache, MMR diversity.
  */
 
 import { searchMemories } from "./memory-client.js";
@@ -305,11 +306,6 @@ export function createHandler(config, api) {
     mmrLambda = 0.7,
     enableMmr = true,
     fuzzyCacheThreshold = DEFAULT_FUZZY_THRESHOLD,
-    // Phase 2 config
-    enableBm25 = false,
-    enableRrf = false,
-    rrfWeights = { vector: 0.4, bm25: 0.3, recency: 0.2, entity: 0.1 },
-    rrfK = 60,
     enableTemporalParsing = false,
   } = config;
 
@@ -323,39 +319,11 @@ export function createHandler(config, api) {
     ? skipPatterns.map((p) => (p instanceof RegExp ? p : new RegExp(p, "i")))
     : DEFAULT_SKIP_PATTERNS;
 
-  // Lazy-load Phase 2 modules
-  let _bm25Module = null;
-  let _rrfModule = null;
+  // Lazy-load query enricher (temporal parsing, entity extraction)
   let _queryEnricher = null;
 
-  async function getBm25Module() {
-    if (!enableBm25) return null;
-    if (_bm25Module === undefined) return null; // failed previously
-    if (_bm25Module) return _bm25Module;
-    try {
-      _bm25Module = await import("./bm25-index.js");
-      return _bm25Module;
-    } catch {
-      _bm25Module = undefined;
-      return null;
-    }
-  }
-
-  async function getRrfModule() {
-    if (!enableRrf) return null;
-    if (_rrfModule === undefined) return null;
-    if (_rrfModule) return _rrfModule;
-    try {
-      _rrfModule = await import("./rank-fusion.js");
-      return _rrfModule;
-    } catch {
-      _rrfModule = undefined;
-      return null;
-    }
-  }
-
   async function getQueryEnricher() {
-    if (!enableTemporalParsing && !enableBm25) return null;
+    if (!enableTemporalParsing) return null;
     if (_queryEnricher === undefined) return null;
     if (_queryEnricher) return _queryEnricher;
     try {
@@ -423,18 +391,17 @@ export function createHandler(config, api) {
       return;
     }
 
-    // Phase 2: Query enrichment (entity extraction, temporal parsing)
-    let queryEnrichment = null;
+    // Query enrichment (temporal parsing, entity extraction for logging)
     const enricherMod = await getQueryEnricher();
     if (enricherMod) {
       try {
-        queryEnrichment = enricherMod.enrichQuery(trimmed);
+        enricherMod.enrichQuery(trimmed);
       } catch {
         // Non-fatal
       }
     }
 
-    // Vector search (existing path)
+    // Memory search (OpenClaw handles hybrid vector+FTS5 fusion natively)
     const rawResults = await searchMemories(prompt, {
       maxResults,
       minScore,
@@ -445,38 +412,8 @@ export function createHandler(config, api) {
       logger,
     });
 
-    // Phase 2: BM25 search in parallel (if enabled)
-    let bm25Results = [];
-    const bm25Mod = await getBm25Module();
-    if (bm25Mod) {
-      try {
-        const boostTerms = queryEnrichment?.entities || [];
-        bm25Results = bm25Mod.search(trimmed, { maxResults, boostTerms });
-      } catch {
-        // Non-fatal
-      }
-    }
-
-    // Phase 2: RRF fusion (if both signals available)
-    let fusedResults = rawResults;
-    const rrfMod = await getRrfModule();
-    if (rrfMod && (bm25Results.length > 0 || queryEnrichment)) {
-      try {
-        fusedResults = rrfMod.fuseResults({
-          vectorResults: rawResults || [],
-          bm25Results,
-          weights: rrfWeights,
-          k: rrfK,
-          maxResults,
-          temporalFilter: queryEnrichment?.temporalFilter || null,
-        });
-      } catch {
-        fusedResults = rawResults;
-      }
-    }
-
     // Apply temporal decay
-    const decayedResults = applyTemporalDecay(fusedResults || [], halfLifeHours);
+    const decayedResults = applyTemporalDecay(rawResults || [], halfLifeHours);
 
     // Apply adaptive filtering
     const filtered = adaptiveResults
@@ -515,10 +452,8 @@ export function createHandler(config, api) {
     if (logInjections) {
       const elapsed = Date.now() - startTime;
       const topScore = results[0]?.score?.toFixed(3) || "?";
-      const signals = [enableBm25 && bm25Results.length > 0 ? "vec+bm25" : "vec"];
-      if (enableRrf && rrfMod) signals[0] += "+rrf";
       logger.info(
-        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore}, signals: ${signals[0]})`
+        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore})`
       );
     }
 
