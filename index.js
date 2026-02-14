@@ -10,13 +10,13 @@ import { createHandler } from "./src/hook-handler.js";
 
 /** Default configuration values */
 const DEFAULTS = {
-  maxResults: 5,
-  minScore: 0.3,
-  maxContextChars: 4000,
+  maxResults: 3,
+  minScore: 0.5,
+  maxContextChars: 2000,
   timeoutMs: 2000,
   logInjections: true,
   formatTemplate: "xml",
-  skipShortPrompts: 10,
+  skipShortPrompts: 20,
 };
 
 /**
@@ -33,7 +33,7 @@ export default {
   id: "hookclaw",
   name: "HookClaw Memory RAG",
   description: "Automatically injects relevant memories into every prompt via before_agent_start hook",
-  version: "1.0.0",
+  version: "1.1.0",
 
   /**
    * Called by OpenClaw plugin loader on startup.

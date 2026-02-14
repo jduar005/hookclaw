@@ -1,6 +1,6 @@
 {
   "name": "hookclaw",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "OpenClaw Memory RAG Plugin — auto-hydrates prompts with relevant memories via before_agent_start hook",
   "type": "module",
   "main": "index.js",
