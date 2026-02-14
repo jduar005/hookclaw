@@ -115,6 +115,11 @@
         "type": "string",
         "default": "main",
         "description": "OpenClaw agent ID for database path resolution"
+      },
+      "debugLogging": {
+        "type": "boolean",
+        "default": false,
+        "description": "Log detailed per-result info (prompt preview, path, score, FTS boost, snippet) to gateway logs. Use temporarily for tuning."
       }
     }
   }

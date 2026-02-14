@@ -319,6 +319,8 @@ export function createHandler(config, api) {
     ftsBoostWeight = 0.3,
     ftsDbPath = null,
     ftsAgentId = "main",
+    // Debug logging — logs prompt, each result path/score/snippet
+    debugLogging = false,
   } = config;
 
   const logger = api.logger;
@@ -515,6 +517,12 @@ export function createHandler(config, api) {
           : "no relevant memories found";
         logger.info(`hookclaw: #${callNum} ${reason} (${Date.now() - startTime}ms)`);
       }
+      if (debugLogging) {
+        const promptPreview = trimmed.length > 120
+          ? trimmed.substring(0, 120) + "..."
+          : trimmed;
+        logger.info(`hookclaw: [debug] #${callNum} prompt: "${promptPreview}" → no injection`);
+      }
       return;
     }
 
@@ -534,6 +542,28 @@ export function createHandler(config, api) {
       logger.info(
         `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore}${ftsInfo})`
       );
+    }
+
+    if (debugLogging) {
+      const promptPreview = trimmed.length > 120
+        ? trimmed.substring(0, 120) + "..."
+        : trimmed;
+      logger.info(`hookclaw: [debug] #${callNum} prompt: "${promptPreview}"`);
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        const ftsTag = r._ftsScore !== undefined
+          ? ` | fts: ${r._ftsScore.toFixed(3)} | pre-boost: ${(r._originalScore ?? r.score).toFixed(3)}`
+          : "";
+        const snippet = (r.snippet || r.text || "")
+          .replace(/\n/g, " ")
+          .substring(0, 150);
+        logger.info(
+          `hookclaw: [debug] #${callNum} result[${i}]: ${r.path}:${r.startLine ?? r.start_line ?? "?"}-${r.endLine ?? r.end_line ?? "?"} | score: ${r.score.toFixed(3)}${ftsTag}`
+        );
+        if (snippet) {
+          logger.info(`hookclaw: [debug] #${callNum} result[${i}]: "${snippet}..."`);
+        }
+      }
     }
 
     return { prependContext: context };

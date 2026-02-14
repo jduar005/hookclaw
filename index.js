@@ -35,6 +35,8 @@ const DEFAULTS = {
   ftsBoostWeight: 0.3,
   ftsDbPath: null,
   ftsAgentId: "main",
+  // Debug logging — verbose per-result details in gateway logs
+  debugLogging: false,
 };
 
 /**
