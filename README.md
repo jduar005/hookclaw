@@ -1,6 +1,10 @@
 # HookClaw — OpenClaw Memory RAG Plugin
 
-Automatically injects relevant memories into every prompt via the `before_agent_start` hook. No more context loss after compaction.
+> **v2.0** on `feature/v2-multi-signal-retrieval` branch | **v1.1.0** on `master` (deployed)
+
+Multi-signal memory retrieval plugin — automatically injects relevant memories into every prompt via the `before_agent_start` hook. No more context loss after compaction.
+
+**v2.0 features**: Hybrid search (vector + BM25), RRF rank fusion, temporal decay, MMR diversity, intent-gating skip patterns, fuzzy semantic cache, entity extraction, temporal parsing, feedback loop via `agent_end` hook. Zero external dependencies.
 
 ## Why?
 
@@ -72,7 +76,7 @@ You can also verify via the CLI:
 
 ```bash
 openclaw plugins list
-# Should show: HookClaw Memory RAG | hookclaw | loaded | ~/hookclaw/index.js | 1.1.0
+# Should show: HookClaw Memory RAG | hookclaw | loaded | ~/hookclaw/index.js | 2.0.0
 ```
 
 ## Configuration
@@ -110,6 +114,23 @@ This merges with your existing `openclaw.json` — you only need to add the `hoo
 | `cacheSize` | 20 | Max entries in the prompt dedup LRU cache |
 | `cacheTtlMs` | 300000 | Cache TTL in ms (default 5 min) |
 | `adaptiveResults` | true | Vary result count based on score quality |
+
+#### v2.0 Options (all opt-in)
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `halfLifeHours` | 24 | Temporal decay half-life in hours (0 = disabled) |
+| `enableSkipPatterns` | true | Intent-gating: skip creative/procedural/meta prompts |
+| `skipPatterns` | null | Custom regex patterns (null = built-in defaults) |
+| `enableBm25` | false | BM25 keyword search alongside vector search |
+| `enableRrf` | false | Reciprocal Rank Fusion to merge search signals |
+| `rrfWeights` | `{vector:0.4, bm25:0.3, recency:0.2, entity:0.1}` | Signal weights |
+| `rrfK` | 60 | RRF constant (higher = more conservative fusion) |
+| `enableTemporalParsing` | false | Parse "yesterday", "last week" from prompts |
+| `enableFeedbackLoop` | false | `agent_end` hook for utility score tracking |
+| `enableMmr` | true | MMR diversity filtering to remove duplicate memories |
+| `mmrLambda` | 0.7 | MMR relevance vs diversity (0=max diversity, 1=max relevance) |
+| `fuzzyCacheThreshold` | 0.85 | Jaccard similarity for fuzzy cache matching (1.0 = exact only) |
 
 ### Glossary
 
@@ -183,6 +204,22 @@ Controls total character limit across all injected chunks. Chunks are included i
 { "maxResults": 5, "minScore": 0.45, "maxContextChars": 4000, "skipShortPrompts": 15 }
 ```
 
+**Full v2.0 features (all signals enabled):**
+```json
+{
+  "maxResults": 3,
+  "minScore": 0.5,
+  "enableBm25": true,
+  "enableRrf": true,
+  "enableTemporalParsing": true,
+  "enableFeedbackLoop": true,
+  "enableMmr": true,
+  "enableSkipPatterns": true,
+  "halfLifeHours": 24,
+  "fuzzyCacheThreshold": 0.85
+}
+```
+
 ### Watching the logs
 
 With `logInjections: true`, every prompt produces a log line:
@@ -192,6 +229,8 @@ hookclaw: #1 injecting 3 memories (189ms, top score: 0.529)   — context inject
 hookclaw: #2 no relevant memories found (193ms)                — searched but nothing passed minScore
 hookclaw: #3 skip — prompt too short (5 chars)                 — skipped entirely, no API call
 hookclaw: #4 cache hit (0ms)                                   — same prompt seen recently, reused result
+hookclaw: #5 skip — matched pattern: creative                  — [v2.0] intent gating caught "write a poem"
+hookclaw: #6 fuzzy cache hit (1ms)                             — [v2.0] Jaccard match to cached prompt
 ```
 
 OpenClaw's own `agent/embedded` subsystem independently confirms each injection:
@@ -232,7 +271,14 @@ Chunk text here...
 node --test test/*.test.js
 ```
 
-49 tests covering handler logic, context formatting, prompt cache, and adaptive filtering.
+**169 tests** across 22 suites covering: handler logic, skip patterns, temporal decay, fuzzy cache, MMR diversity, BM25 indexing, RRF fusion, entity extraction, temporal parsing, utility tracking, metrics collection, context formatting.
+
+### Branching Workflow
+
+- **`master`** = deployed on VMs (v1.1.0)
+- **`feature/v2-multi-signal-retrieval`** = v2.0 work (Phases 1-3)
+
+See `docs/HOOKCLAW-OPTIMIZATION-ROADMAP.md` for the full VM testing strategy.
 
 ## Error Handling
 
