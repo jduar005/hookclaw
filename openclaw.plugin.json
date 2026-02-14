@@ -57,8 +57,8 @@
       },
       "halfLifeHours": {
         "type": "number",
-        "default": 24,
-        "description": "Temporal decay half-life in hours. Recent memories score higher. Set 0 to disable."
+        "default": 168,
+        "description": "Temporal decay half-life in hours (default 1 week). Recent memories score higher. Set 0 to disable."
       },
       "skipPatterns": {
         "type": "array",

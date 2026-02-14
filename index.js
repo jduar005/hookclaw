@@ -22,7 +22,7 @@ const DEFAULTS = {
   formatTemplate: "xml",
   skipShortPrompts: 20,
   // v2.1 defaults
-  halfLifeHours: 24,
+  halfLifeHours: 168,
   skipPatterns: null,
   enableSkipPatterns: true,
   enableTemporalParsing: false,
