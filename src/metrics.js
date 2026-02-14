@@ -181,8 +181,7 @@ export class MetricsCollector {
     this._errors = 0;
     this._latencies = [];
     this._topScores = [];
-    this._bm25Used = 0;
-    this._rrfUsed = 0;
+    this._ftsUsed = 0;
     this._startTime = Date.now();
   }
 }

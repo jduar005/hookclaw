@@ -6,7 +6,7 @@
 **Created**: 2026-02-13
 **Last updated**: 2026-02-14
 **Branch**: `feature/v2-multi-signal-retrieval` (master = deployed v1.1.0)
-**Tests**: 169 passing (22 suites), up from 49 in v1.1.0
+**Tests**: 162 passing (22 suites), up from 49 in v1.1.0
 
 ---
 
@@ -637,7 +637,7 @@ LOW IMPACT ─────────┤                             (skip list
 
 ### Phase A: Unit Test Validation (Local)
 
-Already done. 169 tests pass across 22 suites:
+Already done. 162 tests pass across 22 suites (removed 26 BM25/RRF, added 19 FTS5):
 
 ```bash
 cd src_hookclaw && git checkout feature/v2-multi-signal-retrieval

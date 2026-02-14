@@ -13,9 +13,9 @@ HookClaw intercepts every prompt via OpenClaw's `before_agent_start` lifecycle h
 
 v2.0 transforms HookClaw from a single-signal vector search plugin into a multi-signal, self-improving memory system:
 
-- **Hybrid retrieval**: Vector search + BM25 keyword search running in parallel
-- **RRF fusion**: Reciprocal Rank Fusion merges 4 signals (vector, BM25, recency, entity)
-- **Temporal decay**: Recent memories score higher via exponential decay (24h half-life)
+- **Hybrid retrieval**: Vector search + direct FTS5 keyword boost
+- **Score fusion**: Additive FTS5 boost on vector scores for keyword-matching chunks
+- **Temporal decay**: Recent memories score higher via exponential decay (168h half-life)
 - **MMR diversity**: Maximal Marginal Relevance removes redundant/duplicate memories
 - **Intent gating**: Regex-based skip patterns for creative, procedural, and meta prompts
 - **Fuzzy cache**: Jaccard similarity matching increases cache hit rate from ~5% to ~20-30%
@@ -82,18 +82,18 @@ structured logging with Serilog…"
 └─────────────────────────────────────────────────────────────┘  │
                                                                  │
   ┌──────────────────────────────────────────────────────────────┘
-  │  Memory Search Pipeline (v2.0)
+  │  Memory Search Pipeline (v2.1)
   │
   │  ┌────────────┐   ┌──────────────┐   ┌───────────────┐
   └─▶│ Intent     │──▶│ Query        │──▶│ Hybrid Search │
      │ Gating     │   │ Enrichment   │   │               │
      │ (skip      │   │ (entity +    │   │ Vector Search │
-     │  patterns) │   │  temporal)   │   │ + BM25 Search │
+     │  patterns) │   │  temporal)   │   │ + FTS5 Boost  │
      └────────────┘   └──────────────┘   └───────┬───────┘
            │                                      │
            ▼                                      ▼
      Skip creative/     ┌─────────────────────────────────────┐
-     procedural/meta    │ RRF Fusion → Temporal Decay →       │
+     procedural/meta    │ FTS5 Boost → Temporal Decay →       │
      prompts            │ Adaptive Filter → MMR Diversity →   │
                         │ Context Formatter → prependContext   │
                         └──────────────────────┬──────────────┘
@@ -117,16 +117,14 @@ hookclaw/
 │   ├── hook-handler.js       # before_agent_start orchestration (Phase 1 + Phase 2 integration)
 │   ├── memory-client.js      # Wraps createMemorySearchTool with caching
 │   ├── context-formatter.js  # XML + Markdown formatters with char limits
-│   ├── bm25-index.js         # [v2.0] In-memory BM25 full-text search
-│   ├── rank-fusion.js        # [v2.0] Reciprocal Rank Fusion (4 signals)
+│   ├── fts-search.js          # [v2.1] Direct FTS5 keyword search (node:sqlite)
 │   ├── query-enricher.js     # [v2.0] Entity extraction + temporal parsing
 │   ├── utility-tracker.js    # [v2.0] Feedback loop — citation tracking + Bayesian scores
 │   └── metrics.js            # [v2.0] Performance metrics collector
 ├── test/
 │   ├── context-formatter.test.js  # 15 tests
 │   ├── hook-handler.test.js       # 74 tests (was 15 in v1.1.0)
-│   ├── bm25-index.test.js         # [v2.0] 15 tests
-│   ├── rank-fusion.test.js        # [v2.0] 11 tests
+│   ├── fts-search.test.js         # [v2.1] 19 tests
 │   ├── query-enricher.test.js     # [v2.0] 24 tests
 │   ├── utility-tracker.test.js    # [v2.0] 14 tests
 │   └── metrics.test.js            # [v2.0] 16 tests
@@ -146,8 +144,7 @@ index.js
   │     │     └── api.runtime.tools.createMemorySearchTool (OpenClaw internal)
   │     │           └── getMemorySearchManager → SQLite + Gemini embeddings
   │     ├── src/context-formatter.js      (pure functions, no external deps)
-  │     ├── src/bm25-index.js             [v2.0] lazy import, non-fatal if missing
-  │     ├── src/rank-fusion.js            [v2.0] lazy import, non-fatal if missing
+  │     ├── src/fts-search.js              [v2.1] lazy import, non-fatal if missing
   │     └── src/query-enricher.js         [v2.0] lazy import, non-fatal if missing
   │
   └── [if enableFeedbackLoop]
@@ -241,12 +238,13 @@ When a message arrives via Telegram:
    a. Vector search (existing pipeline)
       - Get/create memory search tool (cached after first call)
       - tool.execute() with Promise.race against timeoutMs
-   b. BM25 search [v2.0, if enableBm25]
-      - Build/query in-memory inverted index
-      - Entity terms get extra boost weight
+   b. FTS5 keyword search [v2.1, if enableFts]
+      - Direct read-only query against OpenClaw's chunks_fts table
+      - OR-based queries with stop-word filtering
+      - Sigmoid rank normalization: score = -rank / (-rank + 2)
 
-6. SCORE FUSION [v2.0]
-   a. If enableRrf → fuseResults() merges vector + BM25 + recency + entity signals
+6. SCORE FUSION [v2.1]
+   a. FTS5 additive boost: finalScore = Math.min(1, vectorScore + ftsBoostWeight * ftsScore)
    b. Temporal decay: score *= exp(-ageHours / halfLifeHours)
    c. Adaptive filter: vary result count based on score distribution
    d. MMR diversity: remove redundant memories (if enableMmr)
@@ -484,15 +482,14 @@ node --test test/*.test.js
 
 ### Test Strategy
 
-**169 tests across 22 suites (7 test files):**
+**162 tests across 22 suites (7 test files):**
 
 - **context-formatter.test.js** (15 tests): Pure function tests for XML/Markdown formatting, character limits, XML escaping, empty input handling, truncation behavior
 - **hook-handler.test.js** (74 tests): Handler creation, skip logic, skip patterns (8), parseDateFromPath (5), applyTemporalDecay (7), tokenize (3), jaccardSimilarity (5), mmrFilter (6), fuzzy cache (3), handler integration (3). Uses `fakeApi()` stub.
-- **bm25-index.test.js** (15 tests): Bm25Index class — addChunk, buildIndex, search, term boosting, entity boost, stop words, empty index, singleton pattern.
-- **rank-fusion.test.js** (11 tests): RRF fusion, dedup, weight configuration, temporal filtering, recency signal, empty inputs, single-source passthrough.
+- **fts-search.test.js** (19 tests): FTS5 tokenization, query building, rank normalization, DB path resolution, search integration.
 - **query-enricher.test.js** (24 tests): Entity extraction (11) — file paths, error codes, CamelCase, package names, quoted strings, dedup. Temporal parsing (10) — yesterday, today, last week, N days ago. enrichQuery (3) — combined.
 - **utility-tracker.test.js** (14 tests): Injection recording, citation detection, Bayesian scoring, persistence (load/save), edge cases, clear, summary.
-- **metrics.test.js** (16 tests): All outcome types, latency percentiles, top score averages, BM25/RRF tracking, periodic logging, reset.
+- **metrics.test.js** (16 tests): All outcome types, latency percentiles, top score averages, FTS5 tracking, periodic logging, reset.
 
 ### Manual Verification
 

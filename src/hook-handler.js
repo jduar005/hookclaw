@@ -64,7 +64,7 @@ export function parseDateFromPath(path) {
  * @param {number} [now] - Current timestamp (ms), defaults to Date.now()
  * @returns {Array} Results with adjusted scores, re-sorted by finalScore
  */
-export function applyTemporalDecay(results, halfLifeHours = 24, now = Date.now()) {
+export function applyTemporalDecay(results, halfLifeHours = 168, now = Date.now()) {
   if (!results || results.length === 0) return [];
   if (halfLifeHours <= 0) return results;
 
