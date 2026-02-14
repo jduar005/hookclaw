@@ -95,6 +95,26 @@
         "type": "number",
         "default": 0.85,
         "description": "Jaccard similarity threshold for fuzzy cache matching (0-1). Set 1.0 for exact-only."
+      },
+      "enableFts": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable direct FTS5 keyword search to boost vector results"
+      },
+      "ftsBoostWeight": {
+        "type": "number",
+        "default": 0.3,
+        "description": "Weight for FTS5 keyword boost added to vector score (0-1)"
+      },
+      "ftsDbPath": {
+        "type": "string",
+        "default": null,
+        "description": "Override path to OpenClaw SQLite database. Null uses auto-discovery."
+      },
+      "ftsAgentId": {
+        "type": "string",
+        "default": "main",
+        "description": "OpenClaw agent ID for database path resolution"
       }
     }
   }

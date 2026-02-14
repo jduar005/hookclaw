@@ -307,6 +307,11 @@ export function createHandler(config, api) {
     enableMmr = true,
     fuzzyCacheThreshold = DEFAULT_FUZZY_THRESHOLD,
     enableTemporalParsing = false,
+    // v2.1 config — direct FTS5 keyword search
+    enableFts = true,
+    ftsBoostWeight = 0.3,
+    ftsDbPath = null,
+    ftsAgentId = "main",
   } = config;
 
   const logger = api.logger;
@@ -331,6 +336,22 @@ export function createHandler(config, api) {
       return _queryEnricher;
     } catch {
       _queryEnricher = undefined;
+      return null;
+    }
+  }
+
+  // Lazy-load FTS5 search module
+  let _ftsModule = null;
+
+  async function getFtsModule() {
+    if (!enableFts) return null;
+    if (_ftsModule === undefined) return null; // failed previously
+    if (_ftsModule) return _ftsModule;
+    try {
+      _ftsModule = await import("./fts-search.js");
+      return _ftsModule;
+    } catch {
+      _ftsModule = undefined;
       return null;
     }
   }
@@ -401,7 +422,7 @@ export function createHandler(config, api) {
       }
     }
 
-    // Memory search (OpenClaw handles hybrid vector+FTS5 fusion natively)
+    // Memory search (vector similarity via OpenClaw)
     const rawResults = await searchMemories(prompt, {
       maxResults,
       minScore,
@@ -411,6 +432,50 @@ export function createHandler(config, api) {
       sessionKey: ctx?.sessionKey,
       logger,
     });
+
+    // FTS5 keyword search (parallel signal — boosts vector results with keyword matches)
+    let ftsHits = 0;
+    const ftsMod = await getFtsModule();
+    if (ftsMod && rawResults && rawResults.length > 0) {
+      try {
+        const ftsResults = ftsMod.searchFts(trimmed, {
+          maxResults: maxResults * 2,
+          dbPath: ftsDbPath,
+          agentId: ftsAgentId,
+          logger,
+        });
+        if (ftsResults.length > 0) {
+          // Build a map of path -> FTS5 score for quick lookup
+          const ftsScoreMap = new Map();
+          for (const fr of ftsResults) {
+            const key = fr.path;
+            // Keep highest FTS5 score per path
+            if (!ftsScoreMap.has(key) || ftsScoreMap.get(key) < fr.score) {
+              ftsScoreMap.set(key, fr.score);
+            }
+          }
+
+          // Boost vector results that also appear in FTS5 results
+          for (const result of rawResults) {
+            const ftsScore = ftsScoreMap.get(result.path);
+            if (ftsScore !== undefined) {
+              const boost = ftsBoostWeight * ftsScore;
+              result._ftsScore = ftsScore;
+              result._originalScore = result.score;
+              result.score = result.score + boost;
+              ftsHits++;
+            }
+          }
+
+          // Re-sort after boosting
+          if (ftsHits > 0) {
+            rawResults.sort((a, b) => b.score - a.score);
+          }
+        }
+      } catch {
+        // FTS5 is non-fatal — vector results still work
+      }
+    }
 
     // Apply temporal decay
     const decayedResults = applyTemporalDecay(rawResults || [], halfLifeHours);
@@ -452,8 +517,9 @@ export function createHandler(config, api) {
     if (logInjections) {
       const elapsed = Date.now() - startTime;
       const topScore = results[0]?.score?.toFixed(3) || "?";
+      const ftsInfo = ftsHits > 0 ? `, fts: ${ftsHits} boosted` : "";
       logger.info(
-        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore})`
+        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore}${ftsInfo})`
       );
     }
 

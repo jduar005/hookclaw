@@ -30,6 +30,11 @@ const DEFAULTS = {
   mmrLambda: 0.7,
   enableMmr: true,
   fuzzyCacheThreshold: 0.85,
+  // v2.1 — direct FTS5 keyword search
+  enableFts: true,
+  ftsBoostWeight: 0.3,
+  ftsDbPath: null,
+  ftsAgentId: "main",
 };
 
 /**
@@ -62,7 +67,7 @@ export default {
     api.logger.info(
       `hookclaw: registered before_agent_start hook (v2.1, maxResults=${config.maxResults}, ` +
         `minScore=${config.minScore}, timeout=${config.timeoutMs}ms, format=${config.formatTemplate}, ` +
-        `mmr=${config.enableMmr})`
+        `mmr=${config.enableMmr}, fts=${config.enableFts})`
     );
 
     // Register feedback hook: agent_end (Phase 3)
