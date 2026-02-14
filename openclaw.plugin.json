@@ -39,6 +39,21 @@
         "type": "number",
         "default": 10,
         "description": "Skip prompts shorter than this many characters"
+      },
+      "cacheSize": {
+        "type": "number",
+        "default": 20,
+        "description": "Max entries in the prompt dedup LRU cache"
+      },
+      "cacheTtlMs": {
+        "type": "number",
+        "default": 300000,
+        "description": "Time-to-live for cached prompt results in milliseconds (default 5 min)"
+      },
+      "adaptiveResults": {
+        "type": "boolean",
+        "default": true,
+        "description": "Vary result count based on score quality (high score → fewer results, low score → none)"
       }
     }
   }
