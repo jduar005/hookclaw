@@ -8,3 +8,7 @@ node_modules/
 .vscode/
 .idea/
 coverage/
+
+# OpenClaw config (contains personal plugin settings, API keys, agent config)
+openclaw.json
+openclaw.plugin.local.json
