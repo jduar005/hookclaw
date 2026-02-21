@@ -1,7 +1,6 @@
 # HookClaw Architecture & Technical Guide
 
-> **Version**: 2.1.0 (on `feature/v2-multi-signal-retrieval` branch)
-> **v1.1.0** (on `master`) is what's deployed to VMs
+> **Version**: 2.1.0
 
 ## Overview
 
@@ -27,7 +26,7 @@ v2.0 transforms HookClaw from a single-signal vector search plugin into a multi-
 ### The Problem
 
 ```
-JP: "What did we decide about the logging format?"
+User: "What did we decide about the logging format?"
               │
               ▼
 Agent (post-compaction): "I don't have context about a previous
@@ -37,7 +36,7 @@ logging discussion. Could you remind me what you're referring to?"
 ### The Solution
 
 ```
-JP: "What did we decide about the logging format?"
+User: "What did we decide about the logging format?"
               │
               ▼
   ┌─── HookClaw fires ────────────────────────────────┐
@@ -48,7 +47,7 @@ JP: "What did we decide about the logging format?"
   └────────────────────────────────────────────────────┘
               │
               ▼
-Agent sees: [5 relevant memory snippets] + JP's question
+Agent sees: [5 relevant memory snippets] + user's question
               │
               ▼
 Agent: "Based on our earlier discussion, we decided to use
@@ -156,7 +155,7 @@ All v2.0 modules use **lazy dynamic imports** (`await import(...)`) — they're 
 
 ## Performance Profile
 
-### Measured Latency (Production, Axle VM)
+### Measured Latency (Production)
 
 | Phase | Time | Notes |
 |-------|------|-------|
@@ -409,7 +408,7 @@ As memory grows beyond ~5K chunks, brute-force vector search becomes slow. Optio
 - **Hybrid search**: Combine FTS (already enabled in OpenClaw) with vector search for faster filtering
 
 #### 10. Multi-Agent Memory Partitioning
-If HookClaw is deployed on multiple agents (Axle + Drizzo), each agent currently searches its own memory index. Cross-agent memory sharing could be valuable — "What did Axle tell JP about X?" — but requires careful access control.
+If HookClaw is deployed on multiple agents, each agent currently searches its own memory index. Cross-agent memory sharing could be valuable but requires careful access control.
 
 #### 11. Context Quality Feedback Loop
 Track which injected memories the agent actually references in its response. Over time, this data could train a reranker or adjust per-topic score thresholds. Requires `agent_end` hook integration to analyze the response.
@@ -568,7 +567,7 @@ systemctl --user restart openclaw-gateway
 
 OpenClaw's jiti loader transpiles TypeScript at runtime, but plain JS:
 - Zero build step — edit and restart
-- Easier to debug on the VM (no source maps needed)
+- Easier to debug in production (no source maps needed)
 - No compile errors to chase during rapid iteration
 - The plugin is small enough (~300 lines) that type safety from TS isn't critical
 

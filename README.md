@@ -1,6 +1,6 @@
 # HookClaw — OpenClaw Memory RAG Plugin
 
-> **v2.1** on `feature/v2-multi-signal-retrieval` branch | **v1.1.0** on `master` (deployed)
+> **v2.1** — Multi-signal memory retrieval for OpenClaw agents
 
 Multi-signal memory retrieval plugin — automatically injects relevant memories into every prompt via the `before_agent_start` hook. No more context loss after compaction.
 
@@ -270,13 +270,6 @@ node --test test/*.test.js
 ```
 
 **162 tests** across 23 suites covering: handler logic, skip patterns, temporal decay, fuzzy cache, MMR diversity, FTS5 keyword search, entity extraction, temporal parsing, utility tracking, metrics collection, context formatting.
-
-### Branching Workflow
-
-- **`master`** = deployed on VMs (v1.1.0)
-- **`feature/v2-multi-signal-retrieval`** = v2.1 (burn-in on Axle VM)
-
-See `docs/HOOKCLAW-OPTIMIZATION-ROADMAP.md` for the full VM testing strategy.
 
 ## Error Handling
 

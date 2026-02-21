@@ -2,10 +2,9 @@
 
 > Master plan for evolving HookClaw from a simple vector-search RAG plugin into a state-of-the-art memory injection system. Research-backed, latency-aware, and grounded in what production systems (Zep, Mem0, Letta, LangMem) actually measure.
 
-**Status**: Phases 1-3 implemented on `feature/v2-multi-signal-retrieval` branch — not yet deployed
+**Status**: Phases 1-3 implemented (v2.1 on `master`)
 **Created**: 2026-02-13
-**Last updated**: 2026-02-14
-**Branch**: `feature/v2-multi-signal-retrieval` (master = deployed v1.1.0)
+**Last updated**: 2026-02-21
 **Tests**: 162 passing (22 suites), up from 49 in v1.1.0
 
 ---
@@ -20,7 +19,7 @@ User prompt → skip check → embed (Gemini) → cosine search (sqlite-vec) →
 |--------|-------|
 | Latency (warm) | 150-250ms |
 | Latency bottleneck | Gemini embedding API (~80%) |
-| Index size | 58 chunks (Axle), 44 chunks (Drizzo) |
+| Index size | 44-58 chunks (typical) |
 | Embedding model | gemini-embedding-001, 3072 dims |
 | Vector search | sqlite-vec brute-force cosine |
 | Scoring | cosine similarity only |
@@ -392,7 +391,7 @@ const scores = await Promise.all(
 | Temporal | 55.5% | 58.1% | **+5%** |
 | Open-domain | 72.9% | 75.7% | **+4%** |
 
-**Key insight**: Graph memory excels at temporal and relational reasoning but **underperforms on simple queries**. Only add if JP's usage patterns involve temporal/relational questions.
+**Key insight**: Graph memory excels at temporal and relational reasoning but **underperforms on simple queries**. Only add if usage patterns involve frequent temporal/relational questions.
 
 **Latency**: +200-400ms (graph traversal + LLM entity extraction)
 **Impact**: +5% temporal, +4% open-domain, but -2-8% on simple queries
@@ -538,7 +537,6 @@ Before implementing any optimization, establish baselines:
 Enable `logInjections: true` (already on). After 1 week of normal usage, analyze logs:
 
 ```bash
-# On Axle VM
 journalctl --user -u openclaw-gateway --since "7 days ago" | grep hookclaw | \
   grep -c "injecting"    # → injection count
 journalctl --user -u openclaw-gateway --since "7 days ago" | grep hookclaw | \
@@ -627,84 +625,35 @@ LOW IMPACT ─────────┤                             (skip list
 
 ---
 
-## VM Testing Strategy (v2.0 Rollout)
+## Rollout Testing Strategy
 
-### Branching Workflow
+### Unit Test Validation
 
-- **`master`** = what's deployed on VMs (currently v1.1.0)
-- **`feature/v2-multi-signal-retrieval`** = all v2.0 work (Phases 1-3)
-- Do NOT merge to master until testing is complete
-
-### Phase A: Unit Test Validation (Local)
-
-Already done. 162 tests pass across 22 suites (removed 26 BM25/RRF, added 19 FTS5):
+162 tests pass across 22 suites:
 
 ```bash
-cd src_hookclaw && git checkout feature/v2-multi-signal-retrieval
 node --test test/*.test.js
-# Expected: 169 pass, 0 fail
 ```
 
-### Phase B: Incremental Feature Enablement (Single VM)
+### Incremental Feature Enablement
 
-Deploy v2.0 to ONE VM (e.g., Axle) with all v2.0 features **disabled** (defaults match v1.1.0):
-
-```bash
-# On Axle VM
-cd ~/hookclaw && git checkout feature/v2-multi-signal-retrieval
-systemctl --user restart openclaw-gateway
-```
-
-Verify logs show v2.0 loaded but features are off:
-```
-hookclaw: registered before_agent_start hook (v2.0, ..., bm25=false, rrf=false, mmr=true)
-```
-
-Then enable features one at a time via `~/.openclaw/openclaw.json`:
+Deploy with all v2.x features at defaults, then enable features one at a time:
 
 | Step | Config Change | What to Watch |
 |------|--------------|---------------|
-| B.1 | (defaults) | Verify v2.0 loads cleanly, same behavior as v1.1.0 |
-| B.2 | `enableSkipPatterns: true` (default) | Check logs for `skip — matched pattern` on creative/meta prompts |
-| B.3 | `halfLifeHours: 24` (default) | Check temporal decay in scores (recent > old) |
-| B.4 | `enableMmr: true` (default) | Check that duplicate memories are filtered |
-| B.5 | `enableBm25: true` | Test exact query: "NETSDK1005" — BM25 should find it |
-| B.6 | `enableRrf: true` + `enableBm25: true` | Check logs for RRF fusion scores |
-| B.7 | `enableTemporalParsing: true` | Test: "what did we do yesterday" — should filter by time |
-| B.8 | `enableFeedbackLoop: true` | Check for `agent_end` hook registration, utility-scores.json creation |
+| 1 | (defaults) | Verify v2.1 loads cleanly |
+| 2 | `enableSkipPatterns: true` (default) | Check logs for `skip — matched pattern` on creative/meta prompts |
+| 3 | `halfLifeHours: 168` (default) | Check temporal decay in scores (recent > old) |
+| 4 | `enableMmr: true` (default) | Check that duplicate memories are filtered |
+| 5 | `enableFts: true` (default) | Test exact keyword queries — FTS5 should boost them |
+| 6 | `enableTemporalParsing: true` | Test: "what did we do yesterday" — should filter by time |
+| 7 | `enableFeedbackLoop: true` | Check for `agent_end` hook registration, utility-scores.json creation |
 
 Restart gateway after each config change. Monitor logs for 30 min per step.
 
-### Phase C: Comparative Testing (Both VMs)
+### Key Metrics to Watch
 
-After Phase B succeeds on Axle:
-1. Deploy to Drizzo with same config
-2. Use both VMs normally for 1 week
-3. Compare logs between VMs:
-   ```bash
-   # Injection rate
-   journalctl --user -u openclaw-gateway --since "7 days ago" | grep hookclaw | grep -c "injecting"
-
-   # Skip rate
-   journalctl --user -u openclaw-gateway --since "7 days ago" | grep hookclaw | grep -c "skip"
-
-   # Average latency
-   journalctl --user -u openclaw-gateway --since "7 days ago" | grep hookclaw | grep -oP '\d+ms' | sort -n
-   ```
-
-### Phase D: Merge to Master
-
-Once testing is satisfactory:
-```bash
-git checkout master
-git merge feature/v2-multi-signal-retrieval
-git push
-# Deploy to all VMs
-```
-
-### Key Metrics to Watch During Testing
-
-| Metric | v1.1.0 Baseline | Acceptable v2.0 | Investigate If |
+| Metric | v1.1.0 Baseline | Acceptable v2.1 | Investigate If |
 |--------|-----------------|------------------|----------------|
 | Latency p50 | ~200ms | <250ms | >300ms |
 | Latency p95 | ~350ms | <400ms | >500ms |
@@ -713,11 +662,10 @@ git push
 | Skip pattern hits | N/A | ~15-25% of prompts | >40% (too aggressive) |
 | Cache hit rate | ~5% | ~15-25% (fuzzy cache) | <5% (no improvement) |
 
-### Rollback Plan
+### Rollback
 
-If any issues on a VM:
+Disable the plugin or revert to a previous commit:
 ```bash
-cd ~/hookclaw && git checkout master
+openclaw plugins disable hookclaw
 systemctl --user restart openclaw-gateway
 ```
-Instant rollback to v1.1.0 since master is untouched.
