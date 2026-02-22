@@ -57,7 +57,7 @@ export default {
   id: "hookclaw",
   name: "HookClaw Memory RAG",
   description: "Memory retrieval — injects relevant memories into prompts via OpenClaw native hybrid search with temporal decay, MMR diversity, and feedback",
-  version: "2.1.0",
+  version: "2.2.0",
 
   /**
    * Called by OpenClaw plugin loader on startup.
@@ -71,9 +71,9 @@ export default {
     api.on("before_agent_start", handler, { priority: 10 });
 
     api.logger.info(
-      `hookclaw: registered before_agent_start hook (v2.1, maxResults=${config.maxResults}, ` +
+      `hookclaw: registered before_agent_start hook (v2.2, maxResults=${config.maxResults}, ` +
         `minScore=${config.minScore}, timeout=${config.timeoutMs}ms, format=${config.formatTemplate}, ` +
-        `mmr=${config.enableMmr}, fts=${config.enableFts})`
+        `mmr=${config.enableMmr}, fts=${config.enableFts}, dedup=${config.enableDedup})`
     );
 
     // Register feedback hook: agent_end (Phase 3)
