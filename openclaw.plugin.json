@@ -120,6 +120,21 @@
         "type": "boolean",
         "default": false,
         "description": "Log detailed per-result info (prompt preview, path, score, FTS boost, snippet) to gateway logs. Use temporarily for tuning."
+      },
+      "enableDedup": {
+        "type": "boolean",
+        "default": true,
+        "description": "Suppress repeated injection of the same chunk within a rolling time window"
+      },
+      "dedupWindowMs": {
+        "type": "number",
+        "default": 900000,
+        "description": "Rolling window in milliseconds for injection deduplication (default 15 min)"
+      },
+      "dedupMaxInjections": {
+        "type": "number",
+        "default": 2,
+        "description": "Maximum times a chunk may be injected within dedupWindowMs before suppression"
       }
     }
   }

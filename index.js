@@ -37,6 +37,10 @@ const DEFAULTS = {
   ftsAgentId: "main",
   // Debug logging — verbose per-result details in gateway logs
   debugLogging: false,
+  // v2.2 — injection deduplication
+  enableDedup: true,
+  dedupWindowMs: 900000,     // 15 minutes rolling window
+  dedupMaxInjections: 2,     // max injections per chunk per window
 };
 
 /**

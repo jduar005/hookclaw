@@ -287,6 +287,67 @@ export function adaptiveFilter(results, maxResults) {
   return results.slice(0, maxResults);
 }
 
+// ---------------------------------------------------------------------------
+// Injection deduplication factory (exported for testing)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a deduplication filter for memory chunk injections.
+ * Tracks per-chunk injection timestamps in a rolling time window and suppresses
+ * chunks that have already been injected `dedupMaxInjections` times within that window.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.enableDedup=true]
+ * @param {number}  [opts.dedupWindowMs=900000]  Rolling window in ms (default 15 min)
+ * @param {number}  [opts.dedupMaxInjections=2]  Max injections per chunk per window
+ * @returns {{ filter: Function, record: Function }}
+ */
+export function createDedupFilter({
+  enableDedup = true,
+  dedupWindowMs = 900000,
+  dedupMaxInjections = 2,
+} = {}) {
+  /** @type {Map<string, number[]>} chunk key → injection timestamps */
+  const _history = new Map();
+
+  /**
+   * Filter results to those not yet over their injection budget this window.
+   * Also prunes stale timestamps in-place on each access.
+   * @param {Array<{path?: string, lines?: string}>} results
+   * @returns {Array}
+   */
+  function filter(results) {
+    if (!enableDedup) return results;
+    const now = Date.now();
+    const cutoff = now - dedupWindowMs;
+    return results.filter(r => {
+      const key = `${r.path ?? ""}:${r.lines ?? ""}`;
+      const history = _history.get(key) || [];
+      const recent = history.filter(ts => ts > cutoff);
+      if (recent.length !== history.length) _history.set(key, recent);
+      return recent.length < dedupMaxInjections;
+    });
+  }
+
+  /**
+   * Record injection timestamps for results that are about to be injected.
+   * @param {Array<{path?: string, lines?: string}>} results
+   */
+  function record(results) {
+    if (!enableDedup) return;
+    const now = Date.now();
+    const cutoff = now - dedupWindowMs;
+    for (const r of results) {
+      const key = `${r.path ?? ""}:${r.lines ?? ""}`;
+      const history = (_history.get(key) || []).filter(ts => ts > cutoff);
+      history.push(now);
+      _history.set(key, history);
+    }
+  }
+
+  return { filter, record };
+}
+
 /**
  * Create the hook handler with the given plugin config and API.
  *
@@ -321,12 +382,21 @@ export function createHandler(config, api) {
     ftsAgentId = "main",
     // Debug logging — logs prompt, each result path/score/snippet
     debugLogging = false,
+    // v2.2 — injection deduplication
+    enableDedup = true,
+    dedupWindowMs = 900000,
+    dedupMaxInjections = 2,
   } = config;
 
   const logger = api.logger;
   const openClawConfig = api.config;
   const runtime = api.runtime;
   const cache = new PromptCache(cacheSize, cacheTtlMs, fuzzyCacheThreshold);
+
+  // ---------------------------------------------------------------------------
+  // Injection deduplication — suppress chunks that were recently injected
+  // ---------------------------------------------------------------------------
+  const dedup = createDedupFilter({ enableDedup, dedupWindowMs, dedupMaxInjections });
 
   // Compile skip patterns once at init (invalid user patterns are warned and skipped)
   const compiledSkipPatterns = skipPatterns
@@ -414,12 +484,21 @@ export function createHandler(config, api) {
         }
         return;
       }
-      const context = formatContext(cached, { formatTemplate, maxContextChars });
+      const dedupedCached = dedup.filter(cached);
+      const suppressed = cached.length - dedupedCached.length;
+      if (suppressed > 0 && logInjections) {
+        logger.info(
+          `hookclaw: dedup suppressed ${suppressed} chunk(s) — injected recently (within ${Math.round(dedupWindowMs / 60000)}m)`
+        );
+      }
+      if (dedupedCached.length === 0) return;
+      const context = formatContext(dedupedCached, { formatTemplate, maxContextChars });
       if (context) {
+        dedup.record(dedupedCached);
         if (logInjections) {
-          const topScore = cached[0]?.score?.toFixed(3) || "?";
+          const topScore = dedupedCached[0]?.score?.toFixed(3) || "?";
           logger.info(
-            `hookclaw: #${callNum} cache hit — injecting ${cached.length} memories (0ms, top score: ${topScore})`
+            `hookclaw: #${callNum} cache hit — injecting ${dedupedCached.length} memories (0ms, top score: ${topScore})`
           );
         }
         return { prependContext: context };
@@ -505,7 +584,7 @@ export function createHandler(config, api) {
       ? mmrFilter(filtered, mmrLambda, maxResults)
       : filtered;
 
-    // Cache the final results
+    // Cache the raw (pre-dedup) results so dedup is re-evaluated fresh per invocation
     cache.set(trimmed, results || []);
 
     if (!results || results.length === 0) {
@@ -526,7 +605,17 @@ export function createHandler(config, api) {
       return;
     }
 
-    const context = formatContext(results, { formatTemplate, maxContextChars });
+    // Apply injection deduplication
+    const dedupedResults = dedup.filter(results);
+    const suppressed = results.length - dedupedResults.length;
+    if (suppressed > 0 && logInjections) {
+      logger.info(
+        `hookclaw: dedup suppressed ${suppressed} chunk(s) — injected recently (within ${Math.round(dedupWindowMs / 60000)}m)`
+      );
+    }
+    if (dedupedResults.length === 0) return;
+
+    const context = formatContext(dedupedResults, { formatTemplate, maxContextChars });
 
     if (!context) {
       if (logInjections) {
@@ -535,12 +624,14 @@ export function createHandler(config, api) {
       return;
     }
 
+    dedup.record(dedupedResults);
+
     if (logInjections) {
       const elapsed = Date.now() - startTime;
-      const topScore = results[0]?.score?.toFixed(3) || "?";
+      const topScore = dedupedResults[0]?.score?.toFixed(3) || "?";
       const ftsInfo = ftsHits > 0 ? `, fts: ${ftsHits} boosted` : "";
       logger.info(
-        `hookclaw: #${callNum} injecting ${results.length} memories (${elapsed}ms, top score: ${topScore}${ftsInfo})`
+        `hookclaw: #${callNum} injecting ${dedupedResults.length} memories (${elapsed}ms, top score: ${topScore}${ftsInfo})`
       );
     }
 
@@ -549,8 +640,8 @@ export function createHandler(config, api) {
         ? trimmed.substring(0, 120) + "..."
         : trimmed;
       logger.info(`hookclaw: [debug] #${callNum} prompt: "${promptPreview}"`);
-      for (let i = 0; i < results.length; i++) {
-        const r = results[i];
+      for (let i = 0; i < dedupedResults.length; i++) {
+        const r = dedupedResults[i];
         const ftsTag = r._ftsScore !== undefined
           ? ` | fts: ${r._ftsScore.toFixed(3)} | pre-boost: ${(r._originalScore ?? r.score).toFixed(3)}`
           : "";
