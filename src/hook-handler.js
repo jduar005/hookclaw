@@ -386,6 +386,8 @@ export function createHandler(config, api) {
     enableDedup = true,
     dedupWindowMs = 900000,
     dedupMaxInjections = 2,
+    // v2.3 — cron session skip
+    skipCronJobs = true,
   } = config;
 
   const logger = api.logger;
@@ -463,6 +465,15 @@ export function createHandler(config, api) {
         logger.info(`hookclaw: #${callNum} skip — prompt too short (${trimmed.length} chars)`);
       }
       return;
+    }
+
+    // Skip cron sessions if configured
+    if (skipCronJobs) {
+      const sk = ctx?.sessionKey ?? '';
+      if (sk.startsWith('cron:') || sk.includes(':cron:')) {
+        logger.info('hookclaw: skip — cron session');
+        return;
+      }
     }
 
     // Skip pattern matching (intent gating)

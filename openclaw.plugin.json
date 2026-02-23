@@ -135,6 +135,11 @@
         "type": "number",
         "default": 2,
         "description": "Maximum times a chunk may be injected within dedupWindowMs before suppression"
+      },
+      "skipCronJobs": {
+        "type": "boolean",
+        "default": true,
+        "description": "Skip memory injection for cron job sessions (sessionKey starts with 'cron:'). Default true."
       }
     }
   }

@@ -41,6 +41,8 @@ const DEFAULTS = {
   enableDedup: true,
   dedupWindowMs: 900000,     // 15 minutes rolling window
   dedupMaxInjections: 2,     // max injections per chunk per window
+  // v2.3 — cron session skip
+  skipCronJobs: true,        // Skip memory injection for cron job sessions (default: true)
 };
 
 /**
