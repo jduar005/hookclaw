@@ -1,5 +1,5 @@
 /**
- * HookClaw v2.1 — OpenClaw Memory RAG Plugin
+ * HookClaw v2.3 — OpenClaw Memory RAG Plugin
  *
  * Memory retrieval with:
  * - Native hybrid search (vector + FTS5 keyword via OpenClaw)
@@ -59,7 +59,7 @@ export default {
   id: "hookclaw",
   name: "HookClaw Memory RAG",
   description: "Memory retrieval — injects relevant memories into prompts via OpenClaw native hybrid search with temporal decay, MMR diversity, and feedback",
-  version: "2.2.0",
+  version: "2.3.0",
 
   /**
    * Called by OpenClaw plugin loader on startup.
