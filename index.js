@@ -54,12 +54,14 @@ function resolveConfig(userConfig) {
   return { ...DEFAULTS, ...userConfig };
 }
 
+const VERSION = "2.3.0";
+
 /** @type {import('openclaw/plugin-sdk').OpenClawPluginDefinition} */
 export default {
   id: "hookclaw",
   name: "HookClaw Memory RAG",
   description: "Memory retrieval — injects relevant memories into prompts via OpenClaw native hybrid search with temporal decay, MMR diversity, and feedback",
-  version: "2.3.0",
+  version: VERSION,
 
   /**
    * Called by OpenClaw plugin loader on startup.
@@ -73,7 +75,7 @@ export default {
     api.on("before_agent_start", handler, { priority: 10 });
 
     api.logger.info(
-      `hookclaw: registered before_agent_start hook (v2.2, maxResults=${config.maxResults}, ` +
+      `hookclaw: registered before_agent_start hook (v${VERSION}, maxResults=${config.maxResults}, ` +
         `minScore=${config.minScore}, timeout=${config.timeoutMs}ms, format=${config.formatTemplate}, ` +
         `mmr=${config.enableMmr}, fts=${config.enableFts}, dedup=${config.enableDedup})`
     );
