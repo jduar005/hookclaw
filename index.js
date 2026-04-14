@@ -1,5 +1,5 @@
 /**
- * HookClaw v2.3 — OpenClaw Memory RAG Plugin
+ * HookClaw v2.4 — OpenClaw Memory RAG Plugin
  *
  * Memory retrieval with:
  * - Native hybrid search (vector + FTS5 keyword via OpenClaw)
@@ -54,7 +54,7 @@ function resolveConfig(userConfig) {
   return { ...DEFAULTS, ...userConfig };
 }
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 
 /** @type {import('openclaw/plugin-sdk').OpenClawPluginDefinition} */
 export default {

@@ -1,6 +1,6 @@
 {
   "name": "hookclaw",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "OpenClaw Memory RAG Plugin — memory retrieval via native hybrid search with temporal decay, MMR diversity, and feedback",
   "type": "module",
   "main": "index.js",
